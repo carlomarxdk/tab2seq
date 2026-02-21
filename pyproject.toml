@@ -1,0 +1,95 @@
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tab2seq"
+version = "0.0.1"
+description = "Transform tabular event data into sequences ready for Transformer and Sequential models: Life2Vec, BEHRT and more."
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "Germans Savcisens", email = "germans@savcisens.com"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+keywords = ["tokenization", "data preprocessing", "tabular data", "transformer models", "sequential models", "life2vec"]
+
+dependencies = [
+    "numpy>=2.0.0",
+    "polars>=1.38.0,<2.0",
+    "pyarrow>=12.0.0",
+    "pydantic>=2.0.0",
+    "tqdm>=4.65.0",
+    "pyyaml>=6.0",
+    "click>=8.1.0",
+    "joblib>=1.3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0.0",
+    "pytest-cov>=6.0.0",
+    "pytest-xdist>=3.5.0",
+    "ruff>=0.15.0",
+    "mypy>=1.19.0",
+    "types-PyYAML>=6.0.0",
+    ]
+docs = [
+    "mkdocs>=1.6.1",
+    "mkdocs-material>=9.7.1",
+    "mkdocstrings>=1.0.2",
+    "mkdocstrings-python>=2.0.0",
+    "mkdocs-gen-files>=0.6.0",
+    "mkdocs-literate-nav>=0.6.2",
+    "mkdocs-section-index>=0.3.10",
+    "mkdocs-bibtex>=4.4.0",
+]
+
+all = ["tab2seq[dev,docs]"]
+
+[project.urls]
+Homepage = "https://github.com/carlomarxdk/tab2seq"
+Documentation = "https://tab2seq.readthedocs.io"
+Repository = "https://github.com/carlomarxdk/tab2seq"
+Issues = "https://github.com/carlomarxdk/tab2seq/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["tab2seq*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "--strict-markers",
+    "--cov=tab2seq",
+    "--cov-report=term-missing",
+    "--cov-report=html",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "D"]
+ignore = ["D203", "D213"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
