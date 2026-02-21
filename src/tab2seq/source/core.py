@@ -129,6 +129,12 @@ class Source:
                 col for col in [self.config.entity_id_col, *(self.config.timestamp_cols or [])] if col is not None
             ])
         )
+        # TODO: double check
+        # The list comprehension building the subset for drop_nulls creates a list that 
+        # could contain None values, which would then be passed to drop_nulls. 
+        # While this might work in Polars, it's cleaner to filter out 
+        # None values explicitly rather than relying on implicit handling. 
+        # The logic should ensure only valid column names are passed.
 
         sort_by = [self.config.entity_id_col]
         if self.config.timestamp_cols is not None:

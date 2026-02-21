@@ -426,8 +426,8 @@ REGISTRY_SPECS: dict[str, dict] = {
     "labour": {
         "generator": _generate_labour,
         "entity_id_col": "entity_id",
-        "timestamp_cols": ["date"],
-        "categorical_cols": ["status", "occupation", "residence_region", "birthday"],
+        "timestamp_cols": ["date", "birthday"],
+        "categorical_cols": ["status", "occupation", "residence_region"],
         "continuous_cols": ["weekly_hours"],
     },
     "survey": {

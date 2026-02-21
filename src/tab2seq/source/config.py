@@ -60,6 +60,7 @@ class SourceConfig(BaseModel):
             msg = f"output_format must be one of {allowed}, got '{v}'"
             raise ValueError(msg)
         return v
+    # TODO: make single validator for output_format
 
     @field_validator("timestamp_cols", mode="before")
     @classmethod
@@ -97,3 +98,4 @@ class SourceConfig(BaseModel):
         return [
             self.entity_id_col,
         ]
+        # TODO: maybe remove this? 

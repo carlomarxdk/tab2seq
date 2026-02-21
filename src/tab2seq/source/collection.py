@@ -56,7 +56,7 @@ class SourceCollection:
         """Create a collection from a list of config objects.
 
         Args:
-            configs list[SourceConfig]: Source configurations.
+            configs (list[SourceConfig]): Source configurations.
 
         Returns:
             A new :class:`SourceCollection`.
