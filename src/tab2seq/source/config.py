@@ -1,9 +1,62 @@
 from __future__ import annotations
 
-from typing import Any
 from pathlib import Path
+from typing import Any, Literal
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    field_validator,
+    model_validator,
+)
+
+
+class ColumnConfig(BaseModel):
+    """Base configuration for a single column.
+
+    Args:
+        col_name (str): Name of the column in the source data.
+        drop_na (bool): Whether to drop rows with nulls in this column. Defaults to True.
+    """
+
+    col_name: str = Field(min_length=1)
+    drop_na: bool = False
+
+
+class CategoricalColConfig(ColumnConfig):
+    """Configuration for a single categorical column.
+    Args:
+        col_name (str): Name of the column in the source data.
+        prefix (str): Prefix for the output column name after processing (e.g. "DIAG" → "DIAG_I21.9").
+    """
+
+    prefix: str = Field(min_length=1)
+
+
+class ContinuousColConfig(ColumnConfig):
+    """Configuration for a single continuous column.
+    Args:
+        col_name (str): Name of the column in the source data.
+        prefix (str): Prefix for the output column name after processing (e.g. "COST" → "COST_12").
+        n_bins (int): Number of bins to use if binning is applied.
+        strategy (str): Binning strategy, either "quantile" or "uniform".
+    """
+
+    prefix: str = Field(min_length=1)
+    n_bins: int = Field(gt=0, default=50)
+    strategy: Literal["quantile", "uniform"] = "quantile"
+
+
+class TimestampColConfig(ColumnConfig):
+    is_primary: bool = False
+
+    @model_validator(mode="after")
+    def _check_primary_timestamp(self) -> TimestampColConfig:
+        if self.is_primary and not self.drop_na:
+            raise ValueError(
+                "Primary timestamp column must have 'drop_na' set to True."
+            )
+        return self
 
 
 class SourceConfig(BaseModel):
@@ -12,45 +65,59 @@ class SourceConfig(BaseModel):
     Attributes:
         name (str): Human-readable identifier for this source.
         filepath (Path | str): Path to the data file
-        entity_id_col (str): Column name for entity IDs (e.g., person_id, patient_id)
-        timestamp_cols (list[str]): Column names for timestamps
-        categorical_cols (list[str]): Column names for categorical event features (e.g, ["diagnosis", "procedure", "department"])
-        continuous_cols (list[str]): Column names for continuous event features (e.g., ["cost", "length_of_stay"])
+        id_col (str): Column name for entity IDs (e.g., person_id, patient_id)
+
+        timestamp_cols (list[TimestampColConfig]): Column names for timestamps
+        categorical_cols (list[CategoricalColConfig]): Column names for categorical event features
+        continuous_cols (list[ContinuousColConfig]): Column names for continuous event features
         output_format (str): Storage format, either ``"parquet"`` or ``"csv"``.
-        dtype_overrides (dict[str, str] | None): Optional dtype mapping passed to the reader.
-        preprocessing (dict[str, Any] | None): Optional dict of preprocessing parameters
-            interpreted downstream (e.g. ICD truncation level). 
-            TODO: Not implemented yet
+
+    Example::
+        config = SourceConfig(
+                name="health",
+                filepath=Path("data/health.parquet"),
+                id_col="entity_id",
+                timestamp_cols=[TimestampColConfig(col_name="date", is_primary=True)],
+                categorical_cols=[
+                    CategoricalColConfig(col_name="diagnosis", prefix="DIAG"),
+                    CategoricalColConfig(col_name="department", prefix="DEPT"),
+                ],
+                continuous_cols=[
+                    ContinuousColConfig(col_name="cost", prefix="COST", n_bins=20, strategy="quantile")
+                ],
+                output_format="parquet",
+            )
     """
 
     name: str
     filepath: Path | str
-    entity_id_col: str
-    timestamp_cols: list[str] | None = None
-    categorical_cols: list[str] | None = None
-    continuous_cols: list[str] | None = None
-    output_format: str = "parquet"
-    dtype_overrides: dict[str, str] | None = None
-    preprocessing: dict[str, Any] | None = None
+    id_col: str
+    categorical_cols: list[CategoricalColConfig] | None = None
+    continuous_cols: list[ContinuousColConfig] | None = None
+    timestamp_cols: list[TimestampColConfig] | None = None
+    output_format: Literal["parquet", "csv"] = "parquet"
+    output_folder: Path | str = Path("data/sources/")
 
-    @field_validator("entity_id_col", "name", "output_format", mode="before")
+    @field_validator("name", "id_col", mode="before")
     @classmethod
-    def _validate_non_empty_string(cls, v: str, info: Any) -> str:
-        
-        field_name = info.field_name
-        if not isinstance(v, str):
-            msg = f"{field_name} must be a string, got {type(v).__name__}"
-            raise ValueError(msg)
-        if not v:
-            msg = f"{field_name} cannot be empty."
-            raise ValueError(msg)
-        if v.strip() != v:
-            msg = f"{field_name} cannot have leading or trailing whitespace."
-            raise ValueError(msg)
-        if v.strip() == "":
-            msg = f"{field_name} cannot be only whitespace."
-            raise ValueError(msg)
+    def _no_whitespace_string(cls, v: str, info: Any) -> str:
+        if not isinstance(v, str) or not v.strip():
+            raise ValueError(
+                f"'{info.field_name}' must be a non-empty, non-whitespace string."
+            )
+        if v != v.strip():
+            raise ValueError(
+                f"'{info.field_name}' cannot have leading or trailing whitespace."
+            )
         return v
+
+    @field_validator("filepath", mode="before")
+    @classmethod
+    def _validate_filepath(cls, v: Path | str) -> Path:
+        path = Path(v)
+        if not path.exists():
+            raise FileNotFoundError(f"File not found: {path}")
+        return path
 
     @field_validator("output_format", mode="before")
     @classmethod
@@ -60,30 +127,6 @@ class SourceConfig(BaseModel):
             msg = f"output_format must be one of {allowed}, got '{v}'"
             raise ValueError(msg)
         return v
-    # TODO: make single validator for output_format
-
-    @field_validator("timestamp_cols", mode="before")
-    @classmethod
-    def _validate_timestamp_cols(cls, v: list[str] | None) -> list[str] | None:
-        if v is None:
-            return v
-        if not isinstance(v, list):
-            msg = f"timestamp_cols must be a list of strings, got {type(v).__name__}"
-            raise ValueError(msg)
-        for col in v:
-            if not isinstance(col, str):
-                msg = f"Each element in timestamp_cols must be a string, got {type(col).__name__}"
-                raise ValueError(msg)
-        return v
-    
-    @field_validator("filepath", mode="before")
-    @classmethod
-    def _validate_filepath(cls, v: Path | str) -> Path:
-        v = Path(v)
-        if not v.exists():
-            msg = f"File not found: {v}"
-            raise FileNotFoundError(msg)
-        return v
 
     @model_validator(mode="after")
     def _check_at_least_one_data_col(self) -> SourceConfig:
@@ -92,10 +135,50 @@ class SourceConfig(BaseModel):
             raise ValueError(msg)
         return self
 
+    @model_validator(mode="after")
+    def _check_at_most_one_primary_timestamp(self) -> SourceConfig:
+        if not self.timestamp_cols:
+            return self
+        primary = [col for col in self.timestamp_cols if col.is_primary]
+        if len(primary) > 1:
+            names = [col.col_name for col in primary]
+            raise ValueError(
+                f"At most one timestamp column can be primary, got {len(primary)}: {names}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_no_duplicate_col_names(self) -> SourceConfig:
+        """Ensure col_name is unique across all column configs and id_col."""
+        all_names: list[str] = [self.id_col]
+        for group in (self.timestamp_cols, self.categorical_cols, self.continuous_cols):
+            if group:
+                all_names.extend(col.col_name for col in group)
+
+        seen, duplicates = set(), set()
+        for name in all_names:
+            if name in seen:
+                duplicates.add(name)
+            seen.add(name)
+
+        if duplicates:
+            raise ValueError(
+                f"Duplicate column names found across configs: {sorted(duplicates)}"
+            )
+        return self
+
     @property
-    def required_columns(self) -> list[str | None]:
-        """All columns that must be present in the data."""
-        return [
-            self.entity_id_col,
-        ]
-        # TODO: maybe remove this? 
+    def cols(self) -> list[str]:
+        """All column names required from the source file."""
+        names = [self.id_col]
+        for group in (self.timestamp_cols, self.categorical_cols, self.continuous_cols):
+            if group:
+                names.extend(col.col_name for col in group)
+        return names
+
+    @property
+    def primary_timestamp(self) -> TimestampColConfig | None:
+        """The primary timestamp column config, if any."""
+        if not self.timestamp_cols:
+            return None
+        return next((col for col in self.timestamp_cols if col.is_primary), None)

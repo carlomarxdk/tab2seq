@@ -6,7 +6,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from tab2seq.datasets import generate_synthetic_data, generate_synthetic_collections
+from tab2seq.datasets import generate_synthetic_collections, generate_synthetic_data
 from tab2seq.source import SourceCollection
 
 
@@ -229,7 +229,7 @@ class TestGenerateSyntheticCollections:
                     "labour",
                     "survey",
                 ]
-                assert source.config.entity_id_col == "entity_id"
+                assert source.config.id_col == "entity_id"
                 assert len(source.config.categorical_cols) > 0
 
     def test_generate_synthetic_collections_realistic_values(self):
@@ -265,7 +265,8 @@ class TestGenerateSyntheticCollections:
             unique_participants = df["entity_id"].n_unique()
 
             # Survey should have ~60% participation rate per wave
-            # With 5 waves (2016, 2018, 2020, 2022, 2024), expect significant participation
+            # With 5 waves (2016, 2018, 2020, 2022, 2024),
+            # expect significant participation
             assert unique_participants > 0
             assert unique_participants <= n_entities
 
@@ -276,9 +277,7 @@ class TestGenerateSyntheticData:
     def test_generate_synthetic_data_basic(self):
         """Test that generate_synthetic_data returns dict of paths."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            paths = generate_synthetic_data(
-                output_dir=tmpdir, n_entities=10, seed=42
-            )
+            paths = generate_synthetic_data(output_dir=tmpdir, n_entities=10, seed=42)
 
             assert isinstance(paths, dict)
             assert set(paths.keys()) == {"health", "income", "labour", "survey"}
@@ -286,9 +285,7 @@ class TestGenerateSyntheticData:
     def test_generate_synthetic_data_files_exist(self):
         """Test that generated files exist at returned paths."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            paths = generate_synthetic_data(
-                output_dir=tmpdir, n_entities=10, seed=42
-            )
+            paths = generate_synthetic_data(output_dir=tmpdir, n_entities=10, seed=42)
 
             for registry, path in paths.items():
                 assert Path(path).exists()

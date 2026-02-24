@@ -13,6 +13,7 @@
 ## About
 
 This package extracts and generalizes the data processing patterns from the [Life2Vec](https://github.com/SocialComplexityLab/life2vec) project, making them reusable for similar research projects that need to:
+
 - Work with multiple longitudinal data sources (registries, databases)
 - Define and filter cohorts based on complex criteria
 - Generate realistic synthetic data for development and testing
@@ -34,35 +35,91 @@ Whether you're working with healthcare data, financial records, or any time-stam
 ```bash
 # Basic installation
 pip install tab2seq
-
-# Development installation
-pip install -e ".[dev]"
 ```
 
 ## Quick Start
 
-### Working with Multiple Data Sources
+### Working with a Single Source
 
 ```python
-from tab2seq.source import Source, SourceCollection, SourceConfig
+from tab2seq.source import (
+    Source, 
+    SourceConfig, 
+    SourceCollection, 
+    CategoricalColConfig, 
+    ContinuousColConfig, 
+    TimestampColConfig
+)
+
+config = SourceConfig(
+    name="health",
+    filepath="synthetic_data/health.parquet",
+    id_col="entity_id",
+    categorical_cols=[
+        CategoricalColConfig(col_name="diagnosis", prefix="DIAG"),
+        CategoricalColConfig(col_name="procedure", prefix="PROC"),
+        CategoricalColConfig(col_name="department", prefix="DEPT"),
+    ],
+    continuous_cols=[
+        ContinuousColConfig(col_name="cost", prefix="COST", n_bins=20, strategy="quantile"),
+        ContinuousColConfig(col_name="length_of_stay", prefix="LOS", n_bins=20, strategy="quantile"),
+    ],
+    output_format="parquet",
+    timestamp_cols=[
+        TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+    ]
+)
+
+source = Source(config=config)
+
+# Process and tokenize the columns
+print("Number of unique IDs:", len(source.get_entity_ids()))
+lf_health = source.process(cache=True)
+lf_health.head()
+```
+
+### Working with Multiple Sources
+
+```python
+from tab2seq.source import SourceCollection, SourceConfig, CategoricalColConfig, ContinuousColConfig, TimestampColConfig
 
 # Define your data sources
 configs = [
     SourceConfig(
         name="health",
-        filepath="data/health.parquet",
-        entity_id_col="patient_id",
-        timestamp_cols=["date"],
-        categorical_cols=["diagnosis", "procedure", "department"],
-        continuous_cols=["cost", "length_of_stay"],
+        filepath="synthetic_data/health.parquet",
+        id_col="entity_id",
+        categorical_cols=[
+            CategoricalColConfig(col_name="diagnosis", prefix="DIAG"),
+            CategoricalColConfig(col_name="procedure", prefix="PROC"),
+            CategoricalColConfig(col_name="department", prefix="DEPT"),
+        ],
+        continuous_cols=[
+            ContinuousColConfig(col_name="cost", prefix="COST", n_bins=20, strategy="quantile"),
+            ContinuousColConfig(col_name="length_of_stay", prefix="LOS", n_bins=20, strategy="quantile"),
+        ],
+        output_format="parquet",
+        timestamp_cols=[
+            TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+        ]
     ),
     SourceConfig(
-        name="income",
-        filepath="data/income.parquet",
-        entity_id_col="person_id",
-        timestamp_cols=["year"],
-        categorical_cols=["income_type", "sector"],
-        continuous_cols=["income_amount"],
+        name="labour",
+        filepath="synthetic_data/labour.parquet",
+        id_col="entity_id",
+        categorical_cols=[
+            CategoricalColConfig(col_name="status", prefix="STATUS"),
+            CategoricalColConfig(col_name="occupation", prefix="OCC"),
+            CategoricalColConfig(col_name="residence_region", prefix="REGION"),
+        ],
+        continuous_cols=[
+            ContinuousColConfig(col_name="weekly_hours", prefix="WEEKLY_HOURS")
+        ],
+        output_format="parquet",
+        timestamp_cols=[
+            TimestampColConfig(col_name="date", is_primary=True, drop_na=True),
+            TimestampColConfig(col_name="birthday", is_primary=False, drop_na=True),
+        ],
     ),
 ]
 
@@ -84,18 +141,18 @@ all_entity_ids = collection.get_all_entity_ids()
 ### Generating Synthetic Data
 
 ```python
-from tab2seq.datasets import generate_synthetic_collections
+from tab2seq.datasets import generate_synthetic_data
+import polars as pl
 
-# Generate synthetic registry data for testing
-collection = generate_synthetic_collections(
-    output_dir="data/dummy",
-    n_entities=1000,
-    seed=42
-)
+# Generate synthetic registry data
+data_paths = generate_synthetic_data(output_dir="synthetic_data", 
+                                     n_entities=10000, 
+                                     seed=742, 
+                                     registries=["health", "labour", "survey", "income"],
+                                     file_format="parquet")
 
-# Returns a ready-to-use SourceCollection
-health = collection["health"]
-print(health.read_all().head())
+lf_health = pl.read_parquet(data_paths["health"])
+lf_health.head()
 ```
 
 ## Architecture
@@ -147,17 +204,18 @@ ruff check src/tab2seq tests
 - [ ] `Cohort` and data splits
 - [ ] `Tokenization` implementation
 - [ ] `Vocabulary` implementation
-- [ ] Caching and chunking
+- [x] Caching and chunking
+- [ ] Documentation
 
 ## Citation
 
 If you use this package in your research, please cite:
 
 ```bibtex
-@software{tab2seq2024,
+@software{tab2seq2026,
   author = {Savcisens, Germans},
   title = {tab2seq: Scalable Tabular to Sequential Data Processing},
-  year = {2024},
+  year = {2026},
   url = {https://github.com/carlomarxdk/tab2seq}
 }
 ```
@@ -180,7 +238,7 @@ And the original Life2Vec paper that inspired this work:
 ## Acknowledgments
 
 - Inspired by the data processing pipeline from [Life2Vec](https://github.com/SocialComplexityLab/life2vec) and [Life2Vec-Light](https://github.com/SocialComplexityLab/life2vec-light)
-- Built with [Polars](https://polars.rs/), [PyArrow](https://arrow.apache.org/docs/python/), [Pydantic](https://pydantic.dev/), and [Joblib](https://joblib.readthedocs.io/)
+- Built with [Polars](https://polars.rs/) and [Pydantic](https://pydantic.dev/).
 
 ## Contributing
 

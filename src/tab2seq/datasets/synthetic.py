@@ -1,13 +1,18 @@
-"""Generate synthetic registry data for exploration and testing.
+r"""Generate synthetic registry data for exploration and testing.
 
 Produces realistic-looking dummy data for multiple registries
 (health, income, labour, survey) with configurable size.
 
 Usage as a module::
 
-    from tab2seq.datasets import generate_synthetic_collections, generate_synthetic_data
+    from tab2seq.datasets import (
+        generate_synthetic_collections,
+        generate_synthetic_data,
+    )
 
-    collection = generate_synthetic_collections(output_dir="data/dummy", n_entities=1000)
+    collection = generate_synthetic_collections(
+        output_dir="data/dummy", n_entities=1000
+    )
 
     # returns a ready-to-use SourceCollection
     health = collection["health"]
@@ -15,11 +20,13 @@ Usage as a module::
 
 Usage from CLI::
 
-    tab2seq generate-synthetic_collections --output-dir data/dummy --n-entities 1000
-    
+    tab2seq generate-synthetic_collections --output-dir data/dummy \\
+        --n-entities 1000
+
     # generates files and prints a summary of the created collection
-    
-    tab2seq generate-synthetic-data --output-dir data/dummy --n-entities 1000 --registries health income --file-format csv
+
+    tab2seq generate-synthetic-data --output-dir data/dummy \\
+        --n-entities 1000 --registries health income --file-format csv
 """
 
 from __future__ import annotations
@@ -30,9 +37,15 @@ from pathlib import Path
 
 import numpy as np
 import polars as pl
+from typing import Literal
 
-from tab2seq.source.config import SourceConfig
 from tab2seq.source.collection import SourceCollection
+from tab2seq.source.config import (
+    CategoricalColConfig,
+    ContinuousColConfig,
+    SourceConfig,
+    TimestampColConfig,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -228,7 +241,6 @@ def _generate_income(
     Each entity gets yearly income records with type, sector,
     and amount.
     """
-
     rng = np.random.default_rng(seed)
     rows: dict[str, list] = {
         "entity_id": [],
@@ -339,7 +351,6 @@ def _generate_survey(
     Entities participate in periodic surveys with education,
     marital status, and satisfaction scores.
     """
-
     rng = np.random.default_rng(seed)
     rows: dict[str, list] = {
         "entity_id": [],
@@ -357,14 +368,15 @@ def _generate_survey(
 
     for eid in entity_ids:
         # ~60% participation rate per wave
-        education = rng.choice(a = _EDUCATION_LEVELS)
-        marital = rng.choice(a = _MARITAL_STATUSES)
+        education = rng.choice(a=_EDUCATION_LEVELS)
+        marital = rng.choice(a=_MARITAL_STATUSES)
 
-        question_1_response = rng.choice(a = _SIMPLE_RESPONSES)
-        # numpy does not support None types in choice, so we are selecting an index instead
-        question_2_response_id = rng.choice(a = len(_SIMPLE_RESPONSES_WITH_NOISE))
+        question_1_response = rng.choice(a=_SIMPLE_RESPONSES)
+        # numpy does not support None types in choice,
+        # so we are selecting an index instead
+        question_2_response_id = rng.choice(a=len(_SIMPLE_RESPONSES_WITH_NOISE))
         question_2_response = _SIMPLE_RESPONSES_WITH_NOISE[question_2_response_id]
-        question_3_response = rng.choice(a = _LIKERT_SCALE)
+        question_3_response = rng.choice(a=_LIKERT_SCALE)
 
         for year in survey_years:
             if rng.random() > 0.6:
@@ -377,15 +389,17 @@ def _generate_survey(
                     education = _EDUCATION_LEVELS[idx + 1]
 
             if rng.random() < 0.08:
-                marital = rng.choice(a = _MARITAL_STATUSES)
+                marital = rng.choice(a=_MARITAL_STATUSES)
 
             if rng.random() < 0.5:
-                question_1_response = rng.choice(a = _SIMPLE_RESPONSES)
+                question_1_response = rng.choice(a=_SIMPLE_RESPONSES)
             if rng.random() < 0.01:
-                question_2_response_id = rng.choice(a = len(_SIMPLE_RESPONSES_WITH_NOISE))
-                question_2_response = _SIMPLE_RESPONSES_WITH_NOISE[question_2_response_id]
+                question_2_response_id = rng.choice(a=len(_SIMPLE_RESPONSES_WITH_NOISE))
+                question_2_response = _SIMPLE_RESPONSES_WITH_NOISE[
+                    question_2_response_id
+                ]
             if rng.random() < 0.3:
-                question_3_response = rng.choice(a = _LIKERT_SCALE)
+                question_3_response = rng.choice(a=_LIKERT_SCALE)
 
             day = rng.integers(1, 28)
             month = rng.integers(3, 11)
@@ -411,37 +425,67 @@ def _generate_survey(
 REGISTRY_SPECS: dict[str, dict] = {
     "health": {
         "generator": _generate_health,
-        "entity_id_col": "entity_id",
-        "timestamp_cols": ["date"],
-        "categorical_cols": ["diagnosis", "procedure", "department"],
-        "continuous_cols": ["cost", "length_of_stay"],
+        "id_col": "entity_id",
+        "timestamp_cols": [
+            TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+        ],
+        "categorical_cols": [
+            CategoricalColConfig(col_name="diagnosis", prefix="DIAG"),
+            CategoricalColConfig(col_name="procedure", prefix="PROC"),
+            CategoricalColConfig(col_name="department", prefix="DEPT"),
+        ],
+        "continuous_cols": [
+            ContinuousColConfig(col_name="cost", prefix="COST"),
+            ContinuousColConfig(col_name="length_of_stay", prefix="LOS"),
+        ],
     },
     "income": {
         "generator": _generate_income,
-        "entity_id_col": "entity_id",
-        "timestamp_cols": ["year"],
-        "categorical_cols": ["income_type", "sector"],
-        "continuous_cols": ["income_amount"],
+        "id_col": "entity_id",
+        "timestamp_cols": [
+            TimestampColConfig(col_name="year", is_primary=True, drop_na=True)
+        ],
+        "categorical_cols": [
+            CategoricalColConfig(col_name="income_type", prefix="INCOME"),
+            CategoricalColConfig(col_name="sector", prefix="SECTOR"),
+        ],
+        "continuous_cols": [
+            ContinuousColConfig(col_name="income_amount", prefix="AMT"),
+        ],
     },
     "labour": {
         "generator": _generate_labour,
-        "entity_id_col": "entity_id",
-        "timestamp_cols": ["date", "birthday"],
-        "categorical_cols": ["status", "occupation", "residence_region"],
-        "continuous_cols": ["weekly_hours"],
+        "id_col": "entity_id",
+        "timestamp_cols": [
+            TimestampColConfig(col_name="date", is_primary=True, drop_na=True),
+            TimestampColConfig(col_name="birthday", is_primary=False, drop_na=False),
+        ],
+        "categorical_cols": [
+            CategoricalColConfig(col_name="status", prefix="STATUS"),
+            CategoricalColConfig(col_name="occupation", prefix="OCC"),
+            CategoricalColConfig(col_name="residence_region", prefix="REGION"),
+        ],
+        "continuous_cols": [
+            ContinuousColConfig(col_name="weekly_hours", prefix="HOURS"),
+        ],
     },
     "survey": {
         "generator": _generate_survey,
-        "entity_id_col": "entity_id",
-        "timestamp_cols": ["survey_date"],
-        "categorical_cols": [
-            "education_level",
-            "marital_status",
-            "question_1_response",
-            "question_2_response",
-            "question_3_response",
+        "id_col": "entity_id",
+        "timestamp_cols": [
+            TimestampColConfig(col_name="survey_date", is_primary=True, drop_na=True)
         ],
-        "continuous_cols": ["self_rated_health", "satisfaction_score"],
+        "categorical_cols": [
+            CategoricalColConfig(col_name="education_level", prefix="EDU"),
+            CategoricalColConfig(col_name="marital_status", prefix="MARITAL"),
+            CategoricalColConfig(col_name="question_1_response", prefix="Q1"),
+            CategoricalColConfig(col_name="question_2_response", prefix="Q2"),
+            CategoricalColConfig(col_name="question_3_response", prefix="Q3"),
+        ],
+        "continuous_cols": [
+            ContinuousColConfig(col_name="self_rated_health", prefix="HEALTH"),
+            ContinuousColConfig(col_name="satisfaction_score", prefix="SAT"),
+        ],
     },
 }
 
@@ -464,8 +508,10 @@ def generate_synthetic_data(
         registries (list[str] | None): Subset of registries to generate. Defaults to all
             available (health, income, labour, survey).
         file_format (str): Format of the output files. Must be 'parquet' or 'csv'.
+
     Returns:
-        dict[str, Path]: Dictionary mapping registry names to the paths of the generated files.
+        dict[str, Path]: Dictionary mapping registry names to the paths of the
+            generated files.
 
     Example::
 
@@ -473,6 +519,7 @@ def generate_synthetic_data(
 
         data_paths = generate_synthetic_data(n_entities=500, file_format="parquet")
         health = pl.read_parquet(data_paths["health"])
+
     """
     if file_format not in VALID_FILE_FORMATS:
         msg = f"file_format must be one of {VALID_FILE_FORMATS}, got '{file_format}'"
@@ -522,7 +569,7 @@ def generate_synthetic_collections(
     n_entities: int = 1000,
     seed: int = 742,
     registries: list[str] | None = None,
-    file_format: str = "parquet",
+    file_format: Literal["parquet", "csv"] = "parquet",
 ) -> SourceCollection:
     """Generate synthetic registry data and return a ready-to-use collection.
 
@@ -547,6 +594,7 @@ def generate_synthetic_collections(
         collection = generate_synthetic_collections(n_entities=500)
         health = collection["health"]
         print(health.scan().collect().head())
+
     """
     if file_format not in VALID_FILE_FORMATS:
         msg = f"file_format must be one of {VALID_FILE_FORMATS}, got '{file_format}'"
@@ -592,10 +640,11 @@ def generate_synthetic_collections(
             SourceConfig(
                 name=name,
                 filepath=path,
-                entity_id_col=spec["entity_id_col"],
+                id_col=spec["id_col"],
                 timestamp_cols=spec["timestamp_cols"],
                 categorical_cols=spec["categorical_cols"],
                 continuous_cols=spec["continuous_cols"],
+                output_format=file_format,  # type: ignore[arg-type]
             )
         )
 

@@ -121,7 +121,7 @@ class SourceCollection:
     @property
     def names(self) -> list[str]:
         """Names of all registered sources.
-        
+
         Returns:
             list[str]: List of source names.
         """
