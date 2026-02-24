@@ -14,7 +14,7 @@
   "related_identifiers": [
     {
       "identifier": "10.1038/s43588-023-00573-5",
-      "relation": "isRelatedTo",
+      "relation": "references",
       "scheme": "doi"
     },
     {
