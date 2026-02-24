@@ -5,8 +5,16 @@ from pathlib import Path
 
 import polars as pl
 import pytest
+from polars.testing import assert_frame_equal
 
-from tab2seq.source import Source, SourceCollection, SourceConfig, SchemaError
+from tab2seq.source import (
+    CategoricalColConfig,
+    ContinuousColConfig,
+    Source,
+    SourceCollection,
+    SourceConfig,
+    TimestampColConfig,
+)
 
 
 @pytest.fixture
@@ -74,14 +82,22 @@ class TestSourceConfig:
         config = SourceConfig(
             name="health",
             filepath=health_parquet_file,
-            entity_id_col="patient_id",
-            timestamp_cols=["date"],
-            categorical_cols=["diagnosis", "department"],
+            id_col="patient_id",
+            timestamp_cols=[
+                TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+            ],
+            categorical_cols=[
+                CategoricalColConfig(col_name="diagnosis", prefix="DIAG"),
+                CategoricalColConfig(col_name="department", prefix="DEPT"),
+            ],
         )
         assert config.name == "health"
-        assert config.entity_id_col == "patient_id"
-        assert config.timestamp_cols == ["date"]
-        assert config.categorical_cols == ["diagnosis", "department"]
+        assert config.id_col == "patient_id"
+        assert len(config.timestamp_cols) == 1
+        assert config.timestamp_cols[0].col_name == "date"
+        assert len(config.categorical_cols) == 2
+        assert config.categorical_cols[0].col_name == "diagnosis"
+        assert config.categorical_cols[1].col_name == "department"
         assert config.continuous_cols is None or config.continuous_cols == []
         assert config.output_format == "parquet"
 
@@ -90,22 +106,31 @@ class TestSourceConfig:
         config = SourceConfig(
             name="health",
             filepath=health_parquet_file,
-            entity_id_col="patient_id",
-            timestamp_cols=["date"],
-            categorical_cols=["diagnosis"],
-            continuous_cols=["cost"],
+            id_col="patient_id",
+            timestamp_cols=[
+                TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+            ],
+            categorical_cols=[
+                CategoricalColConfig(col_name="diagnosis", prefix="DIAG")
+            ],
+            continuous_cols=[ContinuousColConfig(col_name="cost", prefix="COST")],
         )
-        assert config.continuous_cols == ["cost"]
+        assert len(config.continuous_cols) == 1
+        assert config.continuous_cols[0].col_name == "cost"
 
     def test_source_config_csv_format(self, income_csv_file):
         """Test SourceConfig with CSV format."""
         config = SourceConfig(
             name="income",
             filepath=income_csv_file,
-            entity_id_col="person_id",
-            timestamp_cols=["year"],
-            categorical_cols=["income_type"],
-            continuous_cols=["amount"],
+            id_col="person_id",
+            timestamp_cols=[
+                TimestampColConfig(col_name="year", is_primary=True, drop_na=True)
+            ],
+            categorical_cols=[
+                CategoricalColConfig(col_name="income_type", prefix="INCOME")
+            ],
+            continuous_cols=[ContinuousColConfig(col_name="amount", prefix="AMT")],
             output_format="csv",
         )
         assert config.output_format == "csv"
@@ -116,9 +141,13 @@ class TestSourceConfig:
             SourceConfig(
                 name="health",
                 filepath=health_parquet_file,
-                entity_id_col="patient_id",
-                timestamp_cols=["date"],
-                categorical_cols=["diagnosis"],
+                id_col="patient_id",
+                timestamp_cols=[
+                    TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+                ],
+                categorical_cols=[
+                    CategoricalColConfig(col_name="diagnosis", prefix="DIAG")
+                ],
                 output_format="json",
             )
 
@@ -128,9 +157,13 @@ class TestSourceConfig:
             SourceConfig(
                 name="health",
                 filepath=Path("/nonexistent/file.parquet"),
-                entity_id_col="patient_id",
-                timestamp_cols=["date"],
-                categorical_cols=["diagnosis"],
+                id_col="patient_id",
+                timestamp_cols=[
+                    TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+                ],
+                categorical_cols=[
+                    CategoricalColConfig(col_name="diagnosis", prefix="DIAG")
+                ],
             )
 
     def test_source_config_no_data_columns(self, health_parquet_file):
@@ -139,10 +172,12 @@ class TestSourceConfig:
             SourceConfig(
                 name="health",
                 filepath=health_parquet_file,
-                entity_id_col="patient_id",
-                timestamp_cols=["date"],
-                categorical_cols=[],
-                continuous_cols=[],
+                id_col="patient_id",
+                timestamp_cols=[
+                    TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+                ],
+                categorical_cols=None,
+                continuous_cols=None,
             )
 
 
@@ -154,10 +189,15 @@ class TestSource:
         config = SourceConfig(
             name="health",
             filepath=health_parquet_file,
-            entity_id_col="patient_id",
-            timestamp_cols=["date"],
-            categorical_cols=["diagnosis", "department"],
-            continuous_cols=["cost"],
+            id_col="patient_id",
+            timestamp_cols=[
+                TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+            ],
+            categorical_cols=[
+                CategoricalColConfig(col_name="diagnosis", prefix="DIAG"),
+                CategoricalColConfig(col_name="department", prefix="DEPT"),
+            ],
+            continuous_cols=[ContinuousColConfig(col_name="cost", prefix="COST")],
         )
         source = Source(config)
         assert source.name == "health"
@@ -168,10 +208,15 @@ class TestSource:
         config = SourceConfig(
             name="health",
             filepath=health_parquet_file,
-            entity_id_col="patient_id",
-            timestamp_cols=["date"],
-            categorical_cols=["diagnosis", "department"],
-            continuous_cols=["cost"],
+            id_col="patient_id",
+            timestamp_cols=[
+                TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+            ],
+            categorical_cols=[
+                CategoricalColConfig(col_name="diagnosis", prefix="DIAG"),
+                CategoricalColConfig(col_name="department", prefix="DEPT"),
+            ],
+            continuous_cols=[ContinuousColConfig(col_name="cost", prefix="COST")],
         )
         source = Source(config)
         expected_cols = ["patient_id", "date", "diagnosis", "department", "cost"]
@@ -182,10 +227,15 @@ class TestSource:
         config = SourceConfig(
             name="health",
             filepath=health_parquet_file,
-            entity_id_col="patient_id",
-            timestamp_cols=["date"],
-            categorical_cols=["diagnosis", "department"],
-            continuous_cols=["cost"],
+            id_col="patient_id",
+            timestamp_cols=[
+                TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+            ],
+            categorical_cols=[
+                CategoricalColConfig(col_name="diagnosis", prefix="DIAG"),
+                CategoricalColConfig(col_name="department", prefix="DEPT"),
+            ],
+            continuous_cols=[ContinuousColConfig(col_name="cost", prefix="COST")],
         )
         source = Source(config)
         lf = source.scan()
@@ -198,10 +248,13 @@ class TestSource:
         config = SourceConfig(
             name="health",
             filepath=health_parquet_file,
-            entity_id_col="patient_id",
-            timestamp_cols=["date"],
-            categorical_cols=["diagnosis"],
-            continuous_cols=[],
+            id_col="patient_id",
+            timestamp_cols=[
+                TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+            ],
+            categorical_cols=[
+                CategoricalColConfig(col_name="diagnosis", prefix="DIAG")
+            ],
         )
         source = Source(config)
         df = source.read_all()
@@ -213,9 +266,13 @@ class TestSource:
         config = SourceConfig(
             name="health",
             filepath=health_parquet_file,
-            entity_id_col="patient_id",
-            timestamp_cols=["date"],
-            categorical_cols=["diagnosis"],
+            id_col="patient_id",
+            timestamp_cols=[
+                TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+            ],
+            categorical_cols=[
+                CategoricalColConfig(col_name="diagnosis", prefix="DIAG")
+            ],
         )
         source = Source(config)
         entity_ids = source.get_entity_ids()
@@ -227,9 +284,13 @@ class TestSource:
         config = SourceConfig(
             name="health",
             filepath=health_parquet_file,
-            entity_id_col="patient_id",
-            timestamp_cols=["date"],
-            categorical_cols=["diagnosis"],
+            id_col="patient_id",
+            timestamp_cols=[
+                TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+            ],
+            categorical_cols=[
+                CategoricalColConfig(col_name="diagnosis", prefix="DIAG")
+            ],
         )
         source = Source(config)
         chunks = list(source.iter_chunks(chunk_size=2))
@@ -241,9 +302,13 @@ class TestSource:
         config = SourceConfig(
             name="health",
             filepath=health_parquet_file,
-            entity_id_col="patient_id",
-            timestamp_cols=["date"],
-            categorical_cols=["diagnosis"],
+            id_col="patient_id",
+            timestamp_cols=[
+                TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+            ],
+            categorical_cols=[
+                CategoricalColConfig(col_name="diagnosis", prefix="DIAG")
+            ],
         )
         source = Source(config)
         lf = source.scan()
@@ -254,16 +319,138 @@ class TestSource:
         config = SourceConfig(
             name="income",
             filepath=income_csv_file,
-            entity_id_col="person_id",
-            timestamp_cols=["year"],
-            categorical_cols=["income_type"],
-            continuous_cols=["amount"],
+            id_col="person_id",
+            timestamp_cols=[
+                TimestampColConfig(col_name="year", is_primary=True, drop_na=True)
+            ],
+            categorical_cols=[
+                CategoricalColConfig(col_name="income_type", prefix="INCOME")
+            ],
+            continuous_cols=[ContinuousColConfig(col_name="amount", prefix="AMT")],
             output_format="csv",
         )
         source = Source(config)
         df = source.read_all()
         assert df.height == 4
         assert "person_id" in df.columns
+
+    def test_source_process_no_cache(self, health_parquet_file):
+        """Test Source.process() without caching."""
+        config = SourceConfig(
+            name="health",
+            filepath=health_parquet_file,
+            id_col="patient_id",
+            timestamp_cols=[
+                TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+            ],
+            categorical_cols=[
+                CategoricalColConfig(col_name="diagnosis", prefix="DIAG")
+            ],
+        )
+        source = Source(config)
+        df = source.process(cache=False)
+        assert isinstance(df, pl.DataFrame)
+        assert df.height == 5
+        # Verify categorical columns are cast to string
+        assert df["diagnosis"].dtype == pl.Utf8
+
+    def test_source_process_prefix_addition(self, health_parquet_file):
+        """Test Source.process() adds prefixes to categorical values."""
+        config = SourceConfig(
+            name="health",
+            filepath=health_parquet_file,
+            id_col="patient_id",
+            timestamp_cols=[
+                TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+            ],
+            categorical_cols=[
+                CategoricalColConfig(col_name="diagnosis", prefix="DIAG"),
+                CategoricalColConfig(col_name="department", prefix="DEPT"),
+            ],
+        )
+        source = Source(config)
+        df = source.process(cache=False)
+
+        # Assert that diagnosis values have DIAG_ prefix
+        diagnosis_values = df["diagnosis"].to_list()
+        expected_diagnosis = ["DIAG_I21.0", "DIAG_I21.9", "DIAG_J18.1", "DIAG_E11.9", "DIAG_M54.5"]
+        assert diagnosis_values == expected_diagnosis
+
+        # Assert that department values have DEPT_ prefix
+        department_values = df["department"].to_list()
+        expected_department = ["DEPT_cardiology", "DEPT_cardiology", "DEPT_pulmonology", "DEPT_endocrinology", "DEPT_orthopedics"]
+        assert department_values == expected_department
+
+    def test_source_process_with_cache_parquet(self, health_parquet_file):
+        """Test Source.process() with parquet caching."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = SourceConfig(
+                name="health",
+                filepath=health_parquet_file,
+                id_col="patient_id",
+                timestamp_cols=[
+                    TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+                ],
+                categorical_cols=[
+                    CategoricalColConfig(col_name="diagnosis", prefix="DIAG")
+                ],
+                output_format="parquet",
+                output_folder=tmpdir,
+            )
+            source = Source(config)
+
+            # First call: should save to cache
+            df1 = source.process(cache=True)
+            assert isinstance(df1, pl.DataFrame)
+            assert df1.height == 5
+
+            # Verify cache file was created
+            cache_dir = Path(tmpdir) / "intermediate" / "health"
+            cache_files = list(cache_dir.glob("*.parquet"))
+            assert len(cache_files) == 1
+            mtime_after_first = cache_files[0].stat().st_mtime
+
+            # Second call: should read from cache (file must not be modified)
+            df2 = source.process(cache=True)
+            assert isinstance(df2, pl.DataFrame)
+            assert df2.height == 5
+            assert cache_files[0].stat().st_mtime == mtime_after_first
+
+            # Verify the data is the same
+            assert_frame_equal(df1, df2)
+
+    def test_source_process_with_cache_csv(self, income_csv_file):
+        """Test Source.process() with CSV caching."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = SourceConfig(
+                name="income",
+                filepath=income_csv_file,
+                id_col="person_id",
+                timestamp_cols=[
+                    TimestampColConfig(col_name="year", is_primary=True, drop_na=True)
+                ],
+                categorical_cols=[
+                    CategoricalColConfig(col_name="income_type", prefix="INCOME")
+                ],
+                output_format="csv",
+                output_folder=tmpdir,
+            )
+            source = Source(config)
+
+            # First call: should save to cache
+            df1 = source.process(cache=True)
+            assert isinstance(df1, pl.DataFrame)
+            assert df1.height == 4
+
+            # Verify cache file was created
+            cache_dir = Path(tmpdir) / "intermediate" / "income"
+            cache_files = list(cache_dir.glob("*.csv"))
+            assert len(cache_files) == 1
+
+            # Second call: should read from cache
+            df2 = source.process(cache=True)
+            assert isinstance(df2, pl.DataFrame)
+            assert df2.height == 4
 
 
 class TestSourceCollection:
@@ -274,9 +461,13 @@ class TestSourceCollection:
         config = SourceConfig(
             name="health",
             filepath=health_parquet_file,
-            entity_id_col="patient_id",
-            timestamp_cols=["date"],
-            categorical_cols=["diagnosis"],
+            id_col="patient_id",
+            timestamp_cols=[
+                TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+            ],
+            categorical_cols=[
+                CategoricalColConfig(col_name="diagnosis", prefix="DIAG")
+            ],
         )
         source = Source(config)
         collection = SourceCollection([source])
@@ -288,16 +479,24 @@ class TestSourceCollection:
             SourceConfig(
                 name="health",
                 filepath=health_parquet_file,
-                entity_id_col="patient_id",
-                timestamp_cols=["date"],
-                categorical_cols=["diagnosis"],
+                id_col="patient_id",
+                timestamp_cols=[
+                    TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+                ],
+                categorical_cols=[
+                    CategoricalColConfig(col_name="diagnosis", prefix="DIAG")
+                ],
             ),
             SourceConfig(
                 name="income",
                 filepath=income_csv_file,
-                entity_id_col="person_id",
-                timestamp_cols=["year"],
-                categorical_cols=["income_type"],
+                id_col="person_id",
+                timestamp_cols=[
+                    TimestampColConfig(col_name="year", is_primary=True, drop_na=True)
+                ],
+                categorical_cols=[
+                    CategoricalColConfig(col_name="income_type", prefix="INCOME")
+                ],
                 output_format="csv",
             ),
         ]
@@ -311,9 +510,13 @@ class TestSourceCollection:
         config = SourceConfig(
             name="health",
             filepath=health_parquet_file,
-            entity_id_col="patient_id",
-            timestamp_cols=["date"],
-            categorical_cols=["diagnosis"],
+            id_col="patient_id",
+            timestamp_cols=[
+                TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+            ],
+            categorical_cols=[
+                CategoricalColConfig(col_name="diagnosis", prefix="DIAG")
+            ],
         )
         collection = SourceCollection.from_configs([config])
         health_source = collection["health"]
@@ -324,9 +527,13 @@ class TestSourceCollection:
         config = SourceConfig(
             name="health",
             filepath=health_parquet_file,
-            entity_id_col="patient_id",
-            timestamp_cols=["date"],
-            categorical_cols=["diagnosis"],
+            id_col="patient_id",
+            timestamp_cols=[
+                TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+            ],
+            categorical_cols=[
+                CategoricalColConfig(col_name="diagnosis", prefix="DIAG")
+            ],
         )
         collection = SourceCollection.from_configs([config])
         with pytest.raises(KeyError, match="Source 'income' not found"):
@@ -338,16 +545,24 @@ class TestSourceCollection:
             SourceConfig(
                 name="health",
                 filepath=health_parquet_file,
-                entity_id_col="patient_id",
-                timestamp_cols=["date"],
-                categorical_cols=["diagnosis"],
+                id_col="patient_id",
+                timestamp_cols=[
+                    TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+                ],
+                categorical_cols=[
+                    CategoricalColConfig(col_name="diagnosis", prefix="DIAG")
+                ],
             ),
             SourceConfig(
                 name="income",
                 filepath=income_csv_file,
-                entity_id_col="person_id",
-                timestamp_cols=["year"],
-                categorical_cols=["income_type"],
+                id_col="person_id",
+                timestamp_cols=[
+                    TimestampColConfig(col_name="year", is_primary=True, drop_na=True)
+                ],
+                categorical_cols=[
+                    CategoricalColConfig(col_name="income_type", prefix="INCOME")
+                ],
                 output_format="csv",
             ),
         ]
@@ -360,9 +575,13 @@ class TestSourceCollection:
         config = SourceConfig(
             name="health",
             filepath=health_parquet_file,
-            entity_id_col="patient_id",
-            timestamp_cols=["date"],
-            categorical_cols=["diagnosis"],
+            id_col="patient_id",
+            timestamp_cols=[
+                TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+            ],
+            categorical_cols=[
+                CategoricalColConfig(col_name="diagnosis", prefix="DIAG")
+            ],
         )
         collection = SourceCollection.from_configs([config])
         assert collection.names == ["health"]
@@ -373,16 +592,24 @@ class TestSourceCollection:
             SourceConfig(
                 name="health",
                 filepath=health_parquet_file,
-                entity_id_col="patient_id",
-                timestamp_cols=["date"],
-                categorical_cols=["diagnosis"],
+                id_col="patient_id",
+                timestamp_cols=[
+                    TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+                ],
+                categorical_cols=[
+                    CategoricalColConfig(col_name="diagnosis", prefix="DIAG")
+                ],
             ),
             SourceConfig(
                 name="income",
                 filepath=income_csv_file,
-                entity_id_col="person_id",
-                timestamp_cols=["year"],
-                categorical_cols=["income_type"],
+                id_col="person_id",
+                timestamp_cols=[
+                    TimestampColConfig(col_name="year", is_primary=True, drop_na=True)
+                ],
+                categorical_cols=[
+                    CategoricalColConfig(col_name="income_type", prefix="INCOME")
+                ],
                 output_format="csv",
             ),
         ]
@@ -398,24 +625,33 @@ class TestSourceCollection:
 sources:
   - name: health
     filepath: {health_parquet_file}
-    entity_id_col: patient_id
+    id_col: patient_id
     timestamp_cols:
-      - date
+      - col_name: date
+        is_primary: true
+        drop_na: true
     categorical_cols:
-      - diagnosis
-      - department
+      - col_name: diagnosis
+        prefix: DIAG
+      - col_name: department
+        prefix: DEPT
     continuous_cols:
-      - cost
+      - col_name: cost
+        prefix: COST
     output_format: parquet
   - name: income
     filepath: {income_csv_file}
-    entity_id_col: person_id
+    id_col: person_id
     timestamp_cols:
-      - year
+      - col_name: year
+        is_primary: true
+        drop_na: true
     categorical_cols:
-      - income_type
+      - col_name: income_type
+        prefix: INCOME
     continuous_cols:
-      - amount
+      - col_name: amount
+        prefix: AMT
     output_format: csv
 """
             f.write(yaml_content)
@@ -426,9 +662,10 @@ sources:
             assert len(collection) == 2
             assert "health" in collection
             assert "income" in collection
-            assert collection["health"].config.categorical_cols == [
-                "diagnosis",
-                "department",
-            ]
+            # Check that categorical_cols are correctly loaded
+            health_cat_cols = collection["health"].config.categorical_cols
+            assert len(health_cat_cols) == 2
+            assert health_cat_cols[0].col_name == "diagnosis"
+            assert health_cat_cols[1].col_name == "department"
         finally:
             yaml_path.unlink()
