@@ -6,7 +6,7 @@
 [![GitHub License](https://img.shields.io/github/license/carlomarxdk/tab2seq)](https://github.com/carlomarxdk/tab2seq/blob/main/LICENSE)
 [![DOI](https://zenodo.org/badge/1163020308.svg)](https://doi.org/10.5281/zenodo.18752504)
 
-**tab2seq** adapts the Life2Vec data processing pipeline to make it easy to work with multi-source tabular event data for sequential modeling projects. Transform registry data, EHR records, and other event-based datasets into formats ready for Transformer and sequential deep learning models.
+**tab2seq** adapts the Life2Vec data processing pipeline to make it easy to work with multi-source tabular event data for sequential modeling projects. Transform registry data, EHR records, and other event-based datasets into tokenized sequences ready for Transformer and sequential deep learning models.
 
 > [!WARNING]
 > This is an alpha package. In the beta version, it will reimplement all the data-preprocessing steps of the [life2vec](https://github.com/SocialComplexityLab/life2vec) and [life2vec-light](https://github.com/carlomarxdk/life2vec-light) repos. See [TODOs](#todos) to see what is implemented at this point.
@@ -16,75 +16,71 @@
 This package extracts and generalizes the data processing patterns from the [Life2Vec](https://github.com/SocialComplexityLab/life2vec) project, making them reusable for similar research projects that need to:
 
 - Work with multiple longitudinal data sources (registries, databases)
-- Define and filter cohorts based on complex criteria
+- Define and filter cohorts based on inclusion criteria
+- Create deterministic train/val/test splits with static context
+- Fit a vocabulary on training data only (no leakage)
+- Produce tokenized, model-ready event sequences with time features
 - Generate realistic synthetic data for development and testing
-- Process large-scale tabular event data efficiently
 
 Whether you're working with healthcare data, financial records, or any time-stamped event data, tab2seq provides the building blocks for preparing data for Life2Vec-style sequential models.
+
+## Pipeline Overview
+
+```
+Sources → Cohort → Vocabulary → EventDataset → Model-ready Parquet
+```
+
+1. **Sources** – Define one `SourceConfig` per event table (health visits, labour records, income, etc.). Each config declares which columns are categorical, continuous, or timestamps.
+2. **Cohort** – Unite sources into a single entity universe, apply inclusion criteria, and split into train/val/test with deterministic seeds.
+3. **Vocabulary** – Fit token mappings and continuous-feature bin edges on the *train split only* to prevent leakage.
+4. **EventDataset** – Build tokenized event rows per split, derive relative-date features (e.g. age), and persist to Parquet with metadata.
 
 ## Features
 
 - **Multi-Source Data Management**: Handle multiple data sources (registries) with unified schema
+- **Cohort Construction**: Entity-level inclusion criteria across sources, deterministic splits, static-attribute propagation
+- **Train-Only Vocabulary**: Token and bin-edge fitting restricted to training entities
+- **Tokenized Event Datasets**: Vectorized token-ID encoding, relative-date features, Parquet persistence
+- **Entity Record Access**: Iterator, random sample, and stateful `next()` retrieval patterns for downstream training loops
 - **Type-Safe Configuration**: Pydantic-based configuration with YAML support
 - **Synthetic Data Generation**: Generate realistic dummy registry data for testing and exploration
 - **Memory-Efficient Loading**: Chunked iteration and lazy loading with Polars
-- **Schema Validation**: Automatic validation of entity IDs, timestamps, and column types
-- **Cross-Source Operations**: Unified access and operations across multiple data sources
 
 ## Installation
 
 ```bash
-# Basic installation
 pip install tab2seq
 ```
 
 ## Quick Start
 
-### Working with a Single Source
+The full pipeline from raw data to model-ready sequences in five steps.
+
+### 1. Generate Synthetic Data
+
+```python
+from tab2seq.datasets import generate_synthetic_data
+import polars as pl
+
+data_paths = generate_synthetic_data(
+    output_dir="synthetic_data",
+    n_entities=10_000,
+    seed=742,
+    registries=["health", "labour"],
+)
+pl.read_parquet(data_paths["health"]).head()
+```
+
+### 2. Define Sources
+
+Each `Source` describes one event table: its file path, ID column, timestamp, and feature columns.
 
 ```python
 from tab2seq.source import (
-    Source, 
-    SourceConfig, 
-    SourceCollection, 
-    CategoricalColConfig, 
-    ContinuousColConfig, 
-    TimestampColConfig
+    Source, SourceCollection, SourceConfig,
+    CategoricalColConfig, ContinuousColConfig, TimestampColConfig,
 )
 
-config = SourceConfig(
-    name="health",
-    filepath="synthetic_data/health.parquet",
-    id_col="entity_id",
-    categorical_cols=[
-        CategoricalColConfig(col_name="diagnosis", prefix="DIAG"),
-        CategoricalColConfig(col_name="procedure", prefix="PROC"),
-        CategoricalColConfig(col_name="department", prefix="DEPT"),
-    ],
-    continuous_cols=[
-        ContinuousColConfig(col_name="cost", prefix="COST", n_bins=20, strategy="quantile"),
-        ContinuousColConfig(col_name="length_of_stay", prefix="LOS", n_bins=20, strategy="quantile"),
-    ],
-    output_format="parquet",
-    timestamp_cols=[
-        TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
-    ]
-)
-
-source = Source(config=config)
-
-# Process and tokenize the columns
-print("Number of unique IDs:", len(source.get_entity_ids()))
-lf_health = source.process(cache=True)
-lf_health.head()
-```
-
-### Working with Multiple Sources
-
-```python
-from tab2seq.source import SourceCollection, SourceConfig, CategoricalColConfig, ContinuousColConfig, TimestampColConfig
-
-# Define your data sources
 configs = [
     SourceConfig(
         name="health",
@@ -96,13 +92,12 @@ configs = [
             CategoricalColConfig(col_name="department", prefix="DEPT"),
         ],
         continuous_cols=[
-            ContinuousColConfig(col_name="cost", prefix="COST", n_bins=20, strategy="quantile"),
-            ContinuousColConfig(col_name="length_of_stay", prefix="LOS", n_bins=20, strategy="quantile"),
+            ContinuousColConfig(col_name="cost", prefix="COST", n_bins=20),
+            ContinuousColConfig(col_name="length_of_stay", prefix="LOS", n_bins=10),
         ],
-        output_format="parquet",
         timestamp_cols=[
-            TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
-        ]
+            TimestampColConfig(col_name="date", is_primary=True, drop_na=True),
+        ],
     ),
     SourceConfig(
         name="labour",
@@ -112,63 +107,144 @@ configs = [
             CategoricalColConfig(col_name="status", prefix="STATUS"),
             CategoricalColConfig(col_name="occupation", prefix="OCC"),
             CategoricalColConfig(col_name="residence_region", prefix="REGION"),
+            CategoricalColConfig(col_name="native_language", prefix="LANG", static=True),
         ],
         continuous_cols=[
-            ContinuousColConfig(col_name="weekly_hours", prefix="WEEKLY_HOURS")
+            ContinuousColConfig(col_name="weekly_hours", prefix="WEEKLY_HOURS", n_bins=10),
         ],
-        output_format="parquet",
         timestamp_cols=[
             TimestampColConfig(col_name="date", is_primary=True, drop_na=True),
-            TimestampColConfig(col_name="birthday", is_primary=False, drop_na=True),
+            TimestampColConfig(col_name="birthday", static=True, drop_na=True),
         ],
     ),
 ]
 
-# Create a source collection
 collection = SourceCollection.from_configs(configs)
 
-# Access individual sources
-health = collection["health"]
-df = health.read_all()
-
-# Or iterate over all sources
 for source in collection:
     print(f"{source.name}: {len(source.get_entity_ids())} entities")
-
-# Cross-source operations
-all_entity_ids = collection.get_all_entity_ids()
 ```
 
-### Generating Synthetic Data
+> Columns marked `static=True` are carried through to the cohort split table as entity-level attributes (e.g. birthday, native language).
+
+### 3. Build a Cohort
+
+A `Cohort` resolves one consistent entity universe across all sources, applies inclusion criteria, and generates deterministic train/val/test splits.
 
 ```python
-from tab2seq.datasets import generate_synthetic_data
-import polars as pl
+from tab2seq.cohort import Cohort, CohortConfig, EntityInclusionCriteria
 
-# Generate synthetic registry data
-data_paths = generate_synthetic_data(output_dir="synthetic_data", 
-                                     n_entities=10000, 
-                                     seed=742, 
-                                     registries=["health", "labour", "survey", "income"],
-                                     file_format="parquet")
+criteria = [
+    EntityInclusionCriteria(source_name="health", required=False),
+    EntityInclusionCriteria(source_name="labour", required=True, min_events=1),
+]
 
-lf_health = pl.read_parquet(data_paths["health"])
-lf_health.head()
+cohort = Cohort(
+    name="my_cohort",
+    sources=collection,
+    inclusion_criteria=criteria,
+    cache_dir="data/cohorts",
+)
+
+entities_df = cohort.build_entities_table(force_recompute=True)
+print(f"Cohort size: {len(cohort)} entities")
+
+split_cfg = CohortConfig(train_frac=0.7, val_frac=0.15, test_frac=0.15, seed=42)
+split_df = cohort.build_or_load_splits(split_cfg, force_recompute=True)
+split_df.head()
 ```
 
-## Architecture
+The split table contains one row per entity with the split label and all static columns.
 
-> [!warning]
-> Work in progress!
+### 4. Fit a Vocabulary (Train Only)
 
-**Available Registries:**
+The vocabulary maps categorical values to token strings and bins continuous features—fitted exclusively on training entities to prevent leakage.
 
-- **health**: Medical events with diagnoses (ICD codes), procedures, departments, costs, and length of stay
-- **income**: Yearly income records with income type, sector, and amounts
-- **labour**: Quarterly labour status with occupation, employment status, and residence
-- **survey**: Periodic survey responses with education level, marital status, and satisfaction scores
+```python
+from tab2seq.config import TokenizerConfig
+from tab2seq.tokenization import Vocabulary
 
-All synthetic data includes realistic temporal patterns, missing data, and correlations between fields to mimic real-world registry data.
+tok_cfg = TokenizerConfig()
+tok_cfg.vocabulary.min_token_count = 1
+tok_cfg.vocabulary.max_vocab_size = 50_000
+
+vocab = Vocabulary(tok_cfg.vocabulary)
+vocab_df = vocab.fit_from_cohort_train(
+    cohort=cohort,
+    split_config=split_cfg,
+    force_recompute=True,
+)
+print(f"Vocabulary size: {vocab_df.height}")
+```
+
+### 5. Build Tokenized Event Datasets
+
+`EventDataset` produces one row per event with integer token IDs, time features, and optional derived columns.
+
+```python
+from tab2seq.datasets import EventDataset, EventDatasetConfig, RelativeDateRule
+
+dataset_cfg = EventDatasetConfig(
+    reference_date="1970-01-01",
+    threshold_date="2021-01-01",
+    include_after_threshold=True,
+    include_token_str=True,
+    relative_date_features=[
+        RelativeDateRule(
+            source_static_column="labour__birthday",
+            output_column="age_years",
+            unit="years",
+        ),
+    ],
+)
+
+dataset = EventDataset(
+    cohort=cohort,
+    vocabulary=vocab,
+    split_config=split_cfg,
+    dataset_config=dataset_cfg,
+)
+
+# Inspect one split in memory
+train_events = dataset.build_split("train", force_recompute_splits=True)
+print(train_events.select(
+    ["entity_id", "source_name", "primary_timestamp", "token_ids", "age_years"]
+).head(5))
+
+# Persist all splits + static table + metadata to Parquet
+artifacts = dataset.write_parquet(force_recompute_splits=True)
+print(artifacts.split_paths)
+```
+
+### Retrieving Entity Records
+
+Three patterns for feeding records into a training loop:
+
+```python
+# Full iterator sweep
+for record in dataset.iter_entity_records(split="train", shuffle=True, seed=42):
+    # record = {"entity_id": ..., "split": ..., "static": {...}, "events": [...]}
+    pass
+
+# Random sample
+record = dataset.sample_entity_record(split="train", seed=7)
+
+# Stateful next() — remembers position across calls
+record = dataset.next_entity_record(split="train", shuffle=True, seed=0, reset=True)
+while record is not None:
+    record = dataset.next_entity_record(split="train", shuffle=True, seed=0)
+```
+
+## Synthetic Registries
+
+`generate_synthetic_data` / `generate_synthetic_collections` create four registry-style tables with realistic temporal patterns, missing data, and cross-field correlations:
+
+| Registry | Key columns |
+|----------|------------|
+| **health** | diagnosis, procedure, department, cost, length_of_stay |
+| **income** | income_type, sector, income_amount |
+| **labour** | status, occupation, weekly_hours, residence_region, birthday |
+| **survey** | education_level, marital_status, self_rated_health, satisfaction_score |
 
 ## Use Cases
 
@@ -176,35 +252,17 @@ All synthetic data includes realistic temporal patterns, missing data, and corre
 - **Registry Data Processing**: Work with multiple event-based registries (health, income, labour, surveys)
 - **Sequential Modeling**: Prepare multi-source data for Life2Vec, BEHRT, or other transformer-based models
 - **Data Pipeline Development**: Use synthetic data to develop and test processing pipelines before working with sensitive real data
-- **Multi-Source Analysis**: Combine and analyze data from multiple longitudinal sources with unified tooling
 
-## Development
-
-```bash
-# Install development dependencies
-pip install -e ".[dev]"
-
-# Run tests
-pytest
-
-# Run tests with coverage
-pytest --cov=tab2seq --cov-report=html
-
-# Format code
-black src/tab2seq tests
-
-# Lint code
-ruff check src/tab2seq tests
-```
 
 ## TODOs
 
 - [x] Synthetic Datasets
 - [x] `Source` implementation
-- [ ] `Cohort` implementation
-- [ ] `Cohort` and data splits
-- [ ] `Tokenization` implementation
-- [ ] `Vocabulary` implementation
+- [x] `Cohort` implementation
+- [x] `Cohort` and data splits
+- [x] `Tokenization` implementation
+- [x] `Vocabulary` implementation
+- [x] `EventDataset` builder
 - [x] Caching and chunking
 - [ ] Documentation
 
@@ -247,9 +305,10 @@ Contributions are welcome! Please open an issue or submit a pull request on [Git
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) file for details.
+MIT License: see [LICENSE](LICENSE) file for details.
 
 ## Support
 
 - 🐛 Issues: [GitHub Issues](https://github.com/carlomarxdk/tab2seq/issues)
 - 💬 Discussions: [GitHub Discussions](https://github.com/carlomarxdk/tab2seq/discussions)
+

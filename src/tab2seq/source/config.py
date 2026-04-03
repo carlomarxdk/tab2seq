@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 from typing import Any, Literal
 
@@ -17,10 +18,12 @@ class ColumnConfig(BaseModel):
     Args:
         col_name (str): Name of the column in the source data.
         drop_na (bool): Whether to drop rows with nulls in this column. Defaults to True.
+        static (bool): Whether this column is static (entity-level) or dynamic (event-level). Defaults to False.
     """
 
     col_name: str = Field(min_length=1)
     drop_na: bool = False
+    static: bool = False
 
 
 class CategoricalColConfig(ColumnConfig):
@@ -49,6 +52,14 @@ class ContinuousColConfig(ColumnConfig):
 
 class TimestampColConfig(ColumnConfig):
     is_primary: bool = False
+    origin: str = "1970-01-01"
+    unit: Literal["days", "weeks", "months", "years", "none"] = "days"
+
+    @field_validator("origin")
+    @classmethod
+    def _validate_origin(cls, v: str) -> str:
+        date.fromisoformat(v)
+        return v
 
     @model_validator(mode="after")
     def _check_primary_timestamp(self) -> TimestampColConfig:
@@ -71,6 +82,7 @@ class SourceConfig(BaseModel):
         categorical_cols (list[CategoricalColConfig]): Column names for categorical event features
         continuous_cols (list[ContinuousColConfig]): Column names for continuous event features
         output_format (str): Storage format, either ``"parquet"`` or ``"csv"``.
+        cache_dir (Path | str): Directory to store cached processed data for this source.
 
     Example::
         config = SourceConfig(
@@ -96,7 +108,8 @@ class SourceConfig(BaseModel):
     continuous_cols: list[ContinuousColConfig] | None = None
     timestamp_cols: list[TimestampColConfig] | None = None
     output_format: Literal["parquet", "csv"] = "parquet"
-    output_folder: Path | str = Path("data/sources/")
+    cache_dir: Path | str = Path("data/sources/")
+    output_folder: Path | str | None = None
 
     @field_validator("name", "id_col", mode="before")
     @classmethod
@@ -133,6 +146,13 @@ class SourceConfig(BaseModel):
         if not self.categorical_cols and not self.continuous_cols:
             msg = "At least one of 'categorical_cols' or 'continuous_cols' must be specified."
             raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _sync_output_folder_to_cache_dir(self) -> SourceConfig:
+        # `output_folder` is retained for compatibility; `cache_dir` is canonical.
+        if self.output_folder is not None:
+            self.cache_dir = Path(self.output_folder)
         return self
 
     @model_validator(mode="after")

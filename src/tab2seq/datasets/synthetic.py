@@ -159,6 +159,20 @@ _EDUCATION_LEVELS = [
     "doctoral",
 ]
 
+_NATIVE_LANGUAGES = [
+    "english",
+    "spanish",
+    "french",
+    "german",
+    "chinese",
+    "arabic",
+    "hindi",
+    "russian",
+    "portuguese",
+    "japanese",
+    "swahili",
+    "turkish",
+]
 _MARITAL_STATUSES = ["single", "married", "divorced", "widowed", "cohabiting"]
 
 _RESIDENCE_REGIONS = ["north", "south", "east", "west", "central", "island", "capital"]
@@ -294,6 +308,7 @@ def _generate_labour(
         "weekly_hours": [],
         "residence_region": [],
         "birthday": [],
+        "native_language": [],
     }
 
     for eid in entity_ids:
@@ -329,6 +344,7 @@ def _generate_labour(
             rows["weekly_hours"].append(max(0.0, hours))
             rows["residence_region"].append(residence_region)
             rows["birthday"].append(birthday)
+            rows["native_language"].append(rng.choice(_NATIVE_LANGUAGES))
             # advance by ~1-3 months
             advance_by = rng.integers(1, 4)
             month = current.month + advance_by
