@@ -17,20 +17,13 @@ class BatchProcessor:
         self.tokenizer = tokenizer
         self.config = config or ProcessorConfig()
 
-    @staticmethod
-    def _normalize_entity_id(entity_id: object) -> str:
-        value = str(entity_id)
-        if value.startswith("person"):
-            return f"entity{value[len('person') :]}"
-        return value
-
     def process_entity(self, entity: tuple[object, pl.DataFrame]) -> dict[str, object]:
         """Process a single entity event frame into model-ready payload."""
         entity_id, events = entity
         token_ids = self.tokenizer.encode(events)
         token_ids = self.tokenizer.pad_sequence(token_ids, self.config.max_sequence_length)
         return {
-            "entity_id": self._normalize_entity_id(entity_id),
+            "entity_id": entity_id,
             "token_ids": token_ids,
             "length": len(token_ids),
         }
