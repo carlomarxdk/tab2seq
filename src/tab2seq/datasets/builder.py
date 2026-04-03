@@ -102,9 +102,10 @@ class EventDataset:
         static_df = self._build_static_table(split_df)
         split_static_df = static_df.filter(pl.col("split") == split_name)
 
-        # Materialize O(1) static lookup for _apply_relative_rules
+        # Materialize O(1) static lookup for _apply_relative_rules using only
+        # the current split to avoid converting the full static table to Python.
         static_lookup: dict[str, dict] = {
-            str(d["entity_id"]): d for d in static_df.to_dicts()
+            str(d["entity_id"]): d for d in split_static_df.to_dicts()
         }
 
         ref_date = date.fromisoformat(self.dataset_config.reference_date)
