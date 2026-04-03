@@ -244,7 +244,7 @@ class Source:
             prevent data leakage; it must be applied after the train/test split.
 
         If *cache* is enabled, the processed DataFrame is saved to a cache
-        file in ``{output_folder}/intermediate/{name}/`` (format controlled by
+        file in ``{self.config.cache_dir}/intermediate/{self.name}/`` (format controlled by
         :attr:`SourceConfig.output_format`). On subsequent calls with the same
         configuration the cached file is read instead of reprocessing.
 
@@ -259,9 +259,7 @@ class Source:
         # TODO: find better way to handle cache_path
         cache_path: Path = Path("")
         if cache:
-            intermediate_dir = (
-                Path(self.config.output_folder) / "intermediate" / self.name
-            )
+            intermediate_dir = Path(self.config.cache_dir) / "intermediate" / self.name
             intermediate_dir.mkdir(parents=True, exist_ok=True)
 
             ext = self.config.output_format
