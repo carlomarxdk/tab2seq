@@ -80,7 +80,7 @@ def test_process_batch_parallel(tokenizer, sample_persons):
 
     assert len(results) == 3
     entity_ids = [r["entity_id"] for r in results]
-    assert set(entity_ids) == {"entity1", "entity2", "entity3"}
+    assert set(entity_ids) == {"person1", "person2", "person3"}
 
 
 def test_process_stream(tokenizer, sample_entities):

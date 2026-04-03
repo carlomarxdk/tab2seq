@@ -153,3 +153,27 @@ def test_vocab_size_property():
     """Test vocab_size property."""
     tokenizer = Tokenizer()
     assert tokenizer.vocab_size == len(tokenizer.vocab)
+
+
+def test_fit_skips_null_values():
+    """Test that fit does not add null values as tokens."""
+    tokenizer = Tokenizer()
+    events = [pl.DataFrame({"event_type": ["A", None, "B"], "value": [10, None, 20]})]
+    tokenizer.fit(events)
+
+    assert "event_type_None" not in tokenizer.vocab
+    assert "value_None" not in tokenizer.vocab
+    assert "event_type_A" in tokenizer.vocab
+    assert "event_type_B" in tokenizer.vocab
+
+
+def test_encode_skips_null_values():
+    """Test that encode does not produce tokens for null values."""
+    tokenizer = Tokenizer()
+    tokenizer.fit([pl.DataFrame({"event_type": ["A", "B"], "value": [10, 20]})])
+
+    events = pl.DataFrame({"event_type": ["A", None, "B"], "value": [10, None, 20]})
+    token_ids = tokenizer.encode(events)
+    decoded = tokenizer.decode(token_ids)
+
+    assert not any("None" in token for token in decoded)

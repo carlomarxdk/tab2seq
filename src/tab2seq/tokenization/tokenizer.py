@@ -55,7 +55,7 @@ class Tokenizer:
                 cols = [c for c in columns if c in df.columns]
 
             for col in cols:
-                for value in df[col].unique():
+                for value in df[col].drop_nulls().unique():
                     token = f"{col}_{value}"
                     if token not in seen_tokens:
                         if next_id < self.config.vocab_size:
@@ -93,6 +93,8 @@ class Tokenizer:
 
         for row in events.iter_rows(named=True):
             for col in cols:
+                if row[col] is None:
+                    continue
                 token = f"{col}_{row[col]}"
                 token_id = self.vocab.get(token, self.vocab[self.config.unk_token])
                 tokens.append(token_id)

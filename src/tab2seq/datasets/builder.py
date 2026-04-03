@@ -109,11 +109,7 @@ class EventDataset:
         }
 
         ref_date = date.fromisoformat(self.dataset_config.reference_date)
-        threshold_date = (
-            date.fromisoformat(self.dataset_config.threshold_date)
-            if self.dataset_config.include_after_threshold
-            else None
-        )
+        threshold_date = date.fromisoformat(self.dataset_config.threshold_date)
 
         source_frames: list[pl.DataFrame] = []
         for source in self.cohort.collection:
@@ -238,8 +234,7 @@ class EventDataset:
                 (pl.col(ts_col) - pl.lit(ref_date)).dt.total_days().cast(pl.Int64).alias("primary_time"),
             )
 
-            if self.dataset_config.include_after_threshold:
-                source_df = source_df.with_columns(
+            source_df = source_df.with_columns(
                     (pl.col(ts_col) >= pl.lit(threshold_date)).alias("after_threshold")
                 )
 
@@ -250,8 +245,7 @@ class EventDataset:
             ]
             if self.dataset_config.include_token_str:
                 out_cols.append("token_str")
-            if self.dataset_config.include_after_threshold:
-                out_cols.append("after_threshold")
+            out_cols.append("after_threshold")
 
             source_out = source_df.select(out_cols)
 
@@ -706,8 +700,7 @@ class EventDataset:
         }
         if self.dataset_config.include_token_str:
             schema["token_str"] = pl.Utf8
-        if self.dataset_config.include_after_threshold:
-            schema["after_threshold"] = pl.Boolean
+        schema["after_threshold"] = pl.Boolean
         for rule in self.dataset_config.relative_date_features:
             schema[rule.output_column] = pl.Float64 if not rule.floor_int else pl.Int64
         return pl.DataFrame({name: pl.Series([], dtype=dtype) for name, dtype in schema.items()})
