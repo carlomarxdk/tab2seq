@@ -7,9 +7,10 @@
 [![DOI](https://zenodo.org/badge/1163020308.svg)](https://doi.org/10.5281/zenodo.18752504)
 
 **tab2seq** adapts the Life2Vec data processing pipeline to make it easy to work with multi-source tabular event data for sequential modeling projects. Transform registry data, EHR records, and other event-based datasets into tokenized sequences ready for Transformer and sequential deep learning models.
+The package reimplements the data-preprocessing steps of the [life2vec](https://github.com/SocialComplexityLab/life2vec) and [life2vec-light](https://github.com/carlomarxdk/life2vec-light) repos. 
 
-> [!WARNING]
-> This is an alpha package. In the beta version, it will reimplement all the data-preprocessing steps of the [life2vec](https://github.com/SocialComplexityLab/life2vec) and [life2vec-light](https://github.com/carlomarxdk/life2vec-light) repos. See [TODOs](#todos) to see what is implemented at this point.
+> [!INFO]
+> This is a **BETA** version of the package.
 
 ## About
 
