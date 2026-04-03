@@ -327,7 +327,6 @@ class Source:
                 ).alias(col_cfg.col_name)
             )
 
-        # df = df.rename({self.config.id_col: "entity_id"})
         return df
 
     def _config_hash(self) -> str:
