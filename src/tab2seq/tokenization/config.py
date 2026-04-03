@@ -13,8 +13,6 @@ class VocabularyConfig(BaseModel):
     special_tokens: list[str] = Field(
         default_factory=lambda: ["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]"]
     )
-    
-    
 class TokenizerConfig(BaseModel):
     """Tokenizer configuration."""
 
