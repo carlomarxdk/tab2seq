@@ -2,6 +2,7 @@
 
 from tab2seq.datasets.builder import EventDataset
 from tab2seq.datasets.config import EventDatasetConfig, RelativeDateRule
+from tab2seq.datasets.registry import DatasetRegistry, DatasetRegistryEntry
 from tab2seq.datasets.synthetic import (
     generate_synthetic_collections,
     generate_synthetic_data,
@@ -10,6 +11,8 @@ from tab2seq.datasets.synthetic import (
 __all__ = [
     "EventDataset",
     "EventDatasetConfig",
+    "DatasetRegistry",
+    "DatasetRegistryEntry",
     "RelativeDateRule",
     "generate_synthetic_collections",
     "generate_synthetic_data",
