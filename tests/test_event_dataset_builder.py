@@ -12,7 +12,7 @@ from tab2seq.source import (
     ContinuousColConfig,
     SourceCollection,
     SourceConfig,
-    TimestampColConfig,
+    TemporalColConfig,
 )
 from tab2seq.tokenization import Vocabulary
 
@@ -47,8 +47,8 @@ def _build_collection(tmp_path: Path) -> SourceCollection:
             id_col="entity_id",
             categorical_cols=[CategoricalColConfig(col_name="diagnosis", prefix="DIAG")],
             continuous_cols=[ContinuousColConfig(col_name="cost", prefix="COST", n_bins=4)],
-            timestamp_cols=[
-                TimestampColConfig(col_name="date", is_primary=True, drop_na=True),
+            temporal_cols=[
+                TemporalColConfig(col_name="date", is_primary=True, drop_na=True),
             ],
         ),
         SourceConfig(
@@ -56,9 +56,9 @@ def _build_collection(tmp_path: Path) -> SourceCollection:
             filepath=labour_path,
             id_col="entity_id",
             categorical_cols=[CategoricalColConfig(col_name="status", prefix="STATUS")],
-            timestamp_cols=[
-                TimestampColConfig(col_name="date", is_primary=True, drop_na=True),
-                TimestampColConfig(
+            temporal_cols=[
+                TemporalColConfig(col_name="date", is_primary=True, drop_na=True),
+                TemporalColConfig(
                     col_name="birthday",
                     static=True,
                     origin="1970-01-01",
@@ -99,6 +99,7 @@ def test_build_split_has_required_columns(tmp_path: Path):
     )
     assert "token_str" in train_df.columns
     assert "primary_time" in train_df.columns
+    assert not train_df.get_column("token_str").str.contains("__entity_id__").any()
 
 
 def test_write_parquet_separate_static_default(tmp_path: Path):

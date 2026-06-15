@@ -102,18 +102,21 @@ class EventDataset:
         static_df = self._build_static_table(split_df)
         split_static_df = static_df.filter(pl.col("split") == split_name)
 
-        # Materialize O(1) static lookup for _apply_relative_rules using only
-        # the current split to avoid converting the full static table to Python.
+        # Materialize O(1) static lookup for _apply_relative_rules
         static_lookup: dict[str, dict] = {
-            str(d["entity_id"]): d for d in split_static_df.to_dicts()
+            str(d["entity_id"]): d for d in static_df.to_dicts()
         }
 
         ref_date = date.fromisoformat(self.dataset_config.reference_date)
-        threshold_date = date.fromisoformat(self.dataset_config.threshold_date)
+        threshold_date = (
+            date.fromisoformat(self.dataset_config.threshold_date)
+            if self.dataset_config.include_after_threshold
+            else None
+        )
 
         source_frames: list[pl.DataFrame] = []
         for source in self.cohort.collection:
-            primary_ts = source.config.primary_timestamp
+            primary_ts = source.config.primary_temporal
             if primary_ts is None:
                 continue
 
@@ -234,7 +237,8 @@ class EventDataset:
                 (pl.col(ts_col) - pl.lit(ref_date)).dt.total_days().cast(pl.Int64).alias("primary_time"),
             )
 
-            source_df = source_df.with_columns(
+            if self.dataset_config.include_after_threshold:
+                source_df = source_df.with_columns(
                     (pl.col(ts_col) >= pl.lit(threshold_date)).alias("after_threshold")
                 )
 
@@ -245,7 +249,8 @@ class EventDataset:
             ]
             if self.dataset_config.include_token_str:
                 out_cols.append("token_str")
-            out_cols.append("after_threshold")
+            if self.dataset_config.include_after_threshold:
+                out_cols.append("after_threshold")
 
             source_out = source_df.select(out_cols)
 
@@ -700,7 +705,8 @@ class EventDataset:
         }
         if self.dataset_config.include_token_str:
             schema["token_str"] = pl.Utf8
-        schema["after_threshold"] = pl.Boolean
+        if self.dataset_config.include_after_threshold:
+            schema["after_threshold"] = pl.Boolean
         for rule in self.dataset_config.relative_date_features:
             schema[rule.output_column] = pl.Float64 if not rule.floor_int else pl.Int64
         return pl.DataFrame({name: pl.Series([], dtype=dtype) for name, dtype in schema.items()})

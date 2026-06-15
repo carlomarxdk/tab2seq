@@ -36,6 +36,17 @@ class Tokenizer:
             self.vocab[token] = idx
             self.reverse_vocab[idx] = token
 
+    def _resolve_columns(
+        self,
+        available_columns: list[str],
+        columns: Optional[list[str]] = None,
+    ) -> list[str]:
+        """Resolve tokenization columns and skip identifier columns by default."""
+        if columns is None:
+            id_columns = set(self.config.id_columns)
+            return [col for col in available_columns if col not in id_columns]
+        return [col for col in columns if col in available_columns]
+
     def fit(
         self, events: list[pl.DataFrame], columns: Optional[list[str]] = None
     ) -> None:
@@ -49,13 +60,10 @@ class Tokenizer:
         next_id = len(self.vocab)
 
         for df in events:
-            if columns is None:
-                cols = df.columns
-            else:
-                cols = [c for c in columns if c in df.columns]
+            cols = self._resolve_columns(df.columns, columns)
 
             for col in cols:
-                for value in df[col].drop_nulls().unique():
+                for value in df[col].unique():
                     token = f"{col}_{value}"
                     if token not in seen_tokens:
                         if next_id < self.config.vocab_size:
@@ -84,17 +92,12 @@ class Tokenizer:
         Returns:
             List of token IDs
         """
-        if columns is None:
-            cols = events.columns
-        else:
-            cols = [c for c in columns if c in events.columns]
+        cols = self._resolve_columns(events.columns, columns)
 
         tokens = [self.vocab[self.config.cls_token]]
 
         for row in events.iter_rows(named=True):
             for col in cols:
-                if row[col] is None:
-                    continue
                 token = f"{col}_{row[col]}"
                 token_id = self.vocab.get(token, self.vocab[self.config.unk_token])
                 tokens.append(token_id)

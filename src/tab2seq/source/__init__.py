@@ -5,9 +5,10 @@ from tab2seq.source.config import (
     CategoricalColConfig,
     ContinuousColConfig,
     SourceConfig,
-    TimestampColConfig,
+    TemporalColConfig,
 )
 from tab2seq.source.core import Source, SchemaError
+
 
 __all__ = [
     "Source",
@@ -16,5 +17,5 @@ __all__ = [
     "SourceConfig",
     "CategoricalColConfig",
     "ContinuousColConfig",
-    "TimestampColConfig",
+    "TemporalColConfig",
 ]

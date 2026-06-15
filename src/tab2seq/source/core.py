@@ -27,7 +27,7 @@ class Source:
         config: Configuration describing this source.
 
     Note:
-        Rows with null entity IDs or primary timestamps are automatically
+        Rows with null entity IDs or primary timestamps/sequence columns  are automatically
         dropped during scanning and reading. Entity IDs are cast to string
         regardless of the original dtype.
 
@@ -38,9 +38,9 @@ class Source:
                 name="health",
                 filepath=Path("data/health.parquet"),
                 id_col="entity_id",
-                timestamp_cols=[
-                    TimestampColConfig(
-                        col_name="date", is_primary=True, drop_na=True
+                temporal_cols=[
+                    TemporalColConfig(
+                        col_name="date", is_primary=True, drop_na=True, col_type="datetime"
                     )
                 ],
                 categorical_cols=[
@@ -134,21 +134,21 @@ class Source:
         read until ``.collect()`` is called.
 
         Note:
-            Rows with null entity IDs are automatically dropped. For timestamp
-            columns with ``drop_na=True``, rows with null timestamps are also dropped.
+            Rows with null entity IDs are automatically dropped. For sequence columns
+            columns with ``drop_na=True``, rows with null sequence values are also dropped.
             Entity IDs are cast to string regardless of the original dtype.
 
         Returns:
             LazyFrame selecting only the relevant columns, sorted by entity ID
-            and timestamp (if defined).
+            and timestamp/temporal (if defined).
 
         """
         lf = self._scan_raw()
         self.validate_schema(lf)
 
-        ts_col_names = [col.col_name for col in (self.config.timestamp_cols or [])]
+        ts_col_names = [col.col_name for col in (self.config.temporal_cols or [])]
         drop_na_cols = [
-            col.col_name for col in (self.config.timestamp_cols or []) if col.drop_na
+            col.col_name for col in (self.config.temporal_cols or []) if col.drop_na
         ]
 
         lf = (
@@ -190,16 +190,16 @@ class Source:
         """Collect all unique entity IDs from this source.
 
         Note:
-            Rows with null entity IDs or timestamps (where ``drop_na=True``) are
+            Rows with null entity IDs or timestamps/temporal values (where ``drop_na=True``) are
             excluded. Entity IDs are cast to string regardless of the original dtype.
 
         Returns:
             Set of unique entity identifiers.
 
         """
-        ts_col_names = [col.col_name for col in (self.config.timestamp_cols or [])]
+        ts_col_names = [col.col_name for col in (self.config.temporal_cols or [])]
         drop_na_cols = [
-            col.col_name for col in (self.config.timestamp_cols or []) if col.drop_na
+            col.col_name for col in (self.config.temporal_cols or []) if col.drop_na
         ]
 
         lf = (
@@ -210,7 +210,7 @@ class Source:
 
         if drop_na_cols:
             logger.info(
-                "Source '%s': scanning for unique entities with timestamp filtering",
+                "Source '%s': scanning for unique entities with temporal (datetime) column filtering",
                 self.name,
             )
             lf = lf.drop_nulls(subset=drop_na_cols)
@@ -327,6 +327,7 @@ class Source:
                 ).alias(col_cfg.col_name)
             )
 
+        # df = df.rename({self.config.id_col: "entity_id"})
         return df
 
     def _config_hash(self) -> str:

@@ -384,7 +384,7 @@ class Cohort:
     def _source_static_columns(self, source: Source) -> list[str]:
         cols: list[str] = []
         for group in (
-            source.config.timestamp_cols,
+            source.config.temporal_cols,
             source.config.categorical_cols,
             source.config.continuous_cols,
         ):

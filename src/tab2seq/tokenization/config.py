@@ -13,10 +13,13 @@ class VocabularyConfig(BaseModel):
     special_tokens: list[str] = Field(
         default_factory=lambda: ["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]"]
     )
+    
+    
 class TokenizerConfig(BaseModel):
     """Tokenizer configuration."""
 
     vocab_size: int = Field(default=10000, gt=0)
+    id_columns: list[str] = Field(default_factory=lambda: ["entity_id"])
     pad_token: str = "[PAD]"
     unk_token: str = "[UNK]"
     cls_token: str = "[CLS]"

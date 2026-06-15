@@ -11,7 +11,7 @@ from tab2seq.source import (
     ContinuousColConfig,
     SourceCollection,
     SourceConfig,
-    TimestampColConfig,
+    TemporalColConfig,
 )
 from tab2seq.tokenization import Vocabulary
 
@@ -58,8 +58,8 @@ def _build_collection(tmp_path: Path) -> SourceCollection:
             continuous_cols=[
                 ContinuousColConfig(col_name="cost", prefix="COST", n_bins=10),
             ],
-            timestamp_cols=[
-                TimestampColConfig(col_name="date", is_primary=True, drop_na=True),
+            temporal_cols=[
+                TemporalColConfig(col_name="date", is_primary=True, drop_na=True),
             ],
         ),
         SourceConfig(
@@ -74,9 +74,9 @@ def _build_collection(tmp_path: Path) -> SourceCollection:
             continuous_cols=[
                 ContinuousColConfig(col_name="weekly_hours", prefix="HOURS"),
             ],
-            timestamp_cols=[
-                TimestampColConfig(col_name="date", is_primary=True, drop_na=True),
-                TimestampColConfig(
+            temporal_cols=[
+                TemporalColConfig(col_name="date", is_primary=True, drop_na=True),
+                TemporalColConfig(
                     col_name="birthday",
                     static=True,
                     origin="1970-01-01",
@@ -110,6 +110,8 @@ def test_vocabulary_fit_and_cache(tmp_path: Path):
     assert "pretty_token" in vocab_df.columns
     assert "[PAD]" in vocab.token2index
     assert any(tok.startswith("health__cost__BIN_") for tok in vocab.token2index)
+    assert not any(tok.startswith("health__entity_id__") for tok in vocab.token2index)
+    assert not any(tok.startswith("labour__entity_id__") for tok in vocab.token2index)
     assert not any("birthday__DAYS_" in tok for tok in vocab.token2index)
 
     non_special = vocab_df.filter(pl.col("category") != "special")
