@@ -155,25 +155,54 @@ def test_vocab_size_property():
     assert tokenizer.vocab_size == len(tokenizer.vocab)
 
 
-def test_fit_skips_null_values():
-    """Test that fit does not add null values as tokens."""
+def test_fit_excludes_entity_id_by_default():
+    """Tokenizer should not add entity_id tokens when columns are not provided."""
     tokenizer = Tokenizer()
-    events = [pl.DataFrame({"event_type": ["A", None, "B"], "value": [10, None, 20]})]
+    events = [
+        pl.DataFrame(
+            {
+                "entity_id": ["e1", "e1", "e2"],
+                "event_type": ["A", "B", "A"],
+            }
+        )
+    ]
+
     tokenizer.fit(events)
 
-    assert "event_type_None" not in tokenizer.vocab
-    assert "value_None" not in tokenizer.vocab
+    assert "entity_id_e1" not in tokenizer.vocab
+    assert "entity_id_e2" not in tokenizer.vocab
     assert "event_type_A" in tokenizer.vocab
-    assert "event_type_B" in tokenizer.vocab
 
 
-def test_encode_skips_null_values():
-    """Test that encode does not produce tokens for null values."""
+def test_encode_excludes_entity_id_by_default():
+    """Tokenizer should not emit entity_id tokens when columns are not provided."""
     tokenizer = Tokenizer()
-    tokenizer.fit([pl.DataFrame({"event_type": ["A", "B"], "value": [10, 20]})])
+    events = pl.DataFrame(
+        {
+            "entity_id": ["e1", "e1"],
+            "event_type": ["A", "B"],
+        }
+    )
 
-    events = pl.DataFrame({"event_type": ["A", None, "B"], "value": [10, None, 20]})
+    tokenizer.fit([events])
     token_ids = tokenizer.encode(events)
     decoded = tokenizer.decode(token_ids)
 
-    assert not any("None" in token for token in decoded)
+    assert not any(token.startswith("entity_id_") for token in decoded)
+
+
+def test_explicit_columns_can_include_entity_id():
+    """Explicit columns should still allow entity_id tokenization when requested."""
+    tokenizer = Tokenizer()
+    events = [
+        pl.DataFrame(
+            {
+                "entity_id": ["e1", "e2"],
+                "event_type": ["A", "B"],
+            }
+        )
+    ]
+
+    tokenizer.fit(events, columns=["entity_id", "event_type"])
+
+    assert "entity_id_e1" in tokenizer.vocab

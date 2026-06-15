@@ -12,7 +12,7 @@ from tab2seq.source import (
     Source,
     SourceCollection,
     SourceConfig,
-    TimestampColConfig,
+    TemporalColConfig,
 )
 
 
@@ -76,8 +76,8 @@ def source_collection(tmp_path: Path) -> SourceCollection:
             name="health",
             filepath=health_path,
             id_col="patient_id",
-            timestamp_cols=[
-                TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+            temporal_cols=[
+                TemporalColConfig(col_name="date", is_primary=True, drop_na=True)
             ],
             categorical_cols=[
                 CategoricalColConfig(col_name="diagnosis", prefix="DIAG"),
@@ -88,8 +88,8 @@ def source_collection(tmp_path: Path) -> SourceCollection:
             name="income",
             filepath=income_path,
             id_col="person_id",
-            timestamp_cols=[
-                TimestampColConfig(col_name="year", is_primary=True, drop_na=True)
+            temporal_cols=[
+                TemporalColConfig(col_name="year", is_primary=True, drop_na=True)
             ],
             categorical_cols=[
                 CategoricalColConfig(col_name="income_type", prefix="INCOME"),
@@ -103,8 +103,8 @@ def source_collection(tmp_path: Path) -> SourceCollection:
             name="labour",
             filepath=labour_path,
             id_col="person_id",
-            timestamp_cols=[
-                TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+            temporal_cols=[
+                TemporalColConfig(col_name="date", is_primary=True, drop_na=True)
             ],
             categorical_cols=[
                 CategoricalColConfig(col_name="status", prefix="STATUS"),

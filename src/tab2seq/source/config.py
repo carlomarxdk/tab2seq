@@ -50,25 +50,43 @@ class ContinuousColConfig(ColumnConfig):
     strategy: Literal["quantile", "uniform"] = "quantile"
 
 
-class TimestampColConfig(ColumnConfig):
+class TemporalColConfig(ColumnConfig):
+    """Ordering/sequencing column:  datetime, wave number, age, etc.
+    
+    Examples:
+        ```
+        TemporalColConfig(col_name="wave", is_primary=True, drop_na=True, col_type="ordinal")
+        TemporalColConfig(col_name="age_at_event", col_type="ordinal")
+        TemporalColConfig(col_name="date", is_primary=True, drop_na=True,
+                  col_type="datetime", origin="1970-01-01", unit="days")
+        ```
+    """
+
     is_primary: bool = False
-    origin: str = "1970-01-01"
-    unit: Literal["days", "weeks", "months", "years", "none"] = "days"
+    col_type: Literal["datetime", "ordinal"] = "datetime"
+
+    # datetime-only fields
+    origin: str | None = None          # e.g. "1970-01-01"; None → not applicable
+    unit: Literal["days", "weeks", "months", "years", "none"] | None = None
 
     @field_validator("origin")
     @classmethod
-    def _validate_origin(cls, v: str) -> str:
-        date.fromisoformat(v)
+    def _validate_origin(cls, v: str | None) -> str | None:
+        if v is not None:
+            date.fromisoformat(v)
         return v
 
     @model_validator(mode="after")
-    def _check_primary_timestamp(self) -> TimestampColConfig:
-        if self.is_primary and not self.drop_na:
-            raise ValueError(
-                "Primary timestamp column must have 'drop_na' set to True."
-            )
+    def _check_ordinal_has_no_date_fields(self) -> TemporalColConfig:
+        if self.col_type == "ordinal" and (self.origin is not None or self.unit is not None):
+            raise ValueError("Ordinal sequence columns cannot have 'origin' or 'unit'.")
         return self
 
+    @model_validator(mode="after")
+    def _check_primary_drop_na(self) -> TemporalColConfig:
+        if self.is_primary and not self.drop_na:
+            raise ValueError("Primary sequence column must have 'drop_na=True'.")
+        return self
 
 class SourceConfig(BaseModel):
     """Schema description for a single data source.
@@ -78,7 +96,7 @@ class SourceConfig(BaseModel):
         filepath (Path | str): Path to the data file
         id_col (str): Column name for entity IDs (e.g., person_id, patient_id)
 
-        timestamp_cols (list[TimestampColConfig]): Column names for timestamps
+        temporal_cols (list[TemporalColConfig]): Column names for temporal ordering/ timestamp columns
         categorical_cols (list[CategoricalColConfig]): Column names for categorical event features
         continuous_cols (list[ContinuousColConfig]): Column names for continuous event features
         output_format (str): Storage format, either ``"parquet"`` or ``"csv"``.
@@ -89,7 +107,7 @@ class SourceConfig(BaseModel):
                 name="health",
                 filepath=Path("data/health.parquet"),
                 id_col="entity_id",
-                timestamp_cols=[TimestampColConfig(col_name="date", is_primary=True)],
+                temporal_cols=[TemporalColConfig(col_name="date", is_primary=True)],
                 categorical_cols=[
                     CategoricalColConfig(col_name="diagnosis", prefix="DIAG"),
                     CategoricalColConfig(col_name="department", prefix="DEPT"),
@@ -106,7 +124,7 @@ class SourceConfig(BaseModel):
     id_col: str
     categorical_cols: list[CategoricalColConfig] | None = None
     continuous_cols: list[ContinuousColConfig] | None = None
-    timestamp_cols: list[TimestampColConfig] | None = None
+    temporal_cols: list[TemporalColConfig] | None = None
     output_format: Literal["parquet", "csv"] = "parquet"
     cache_dir: Path | str = Path("data/sources/")
     output_folder: Path | str | None = None
@@ -157,9 +175,9 @@ class SourceConfig(BaseModel):
 
     @model_validator(mode="after")
     def _check_at_most_one_primary_timestamp(self) -> SourceConfig:
-        if not self.timestamp_cols:
+        if not self.temporal_cols:
             return self
-        primary = [col for col in self.timestamp_cols if col.is_primary]
+        primary = [col for col in self.temporal_cols if col.is_primary]
         if len(primary) > 1:
             names = [col.col_name for col in primary]
             raise ValueError(
@@ -171,7 +189,7 @@ class SourceConfig(BaseModel):
     def _check_no_duplicate_col_names(self) -> SourceConfig:
         """Ensure col_name is unique across all column configs and id_col."""
         all_names: list[str] = [self.id_col]
-        for group in (self.timestamp_cols, self.categorical_cols, self.continuous_cols):
+        for group in (self.temporal_cols, self.categorical_cols, self.continuous_cols):
             if group:
                 all_names.extend(col.col_name for col in group)
 
@@ -182,6 +200,26 @@ class SourceConfig(BaseModel):
             seen.add(name)
 
         if duplicates:
+            if self.id_col in duplicates:
+                offending_groups: list[str] = []
+                if any(
+                    col.col_name == self.id_col
+                    for col in (self.categorical_cols or [])
+                ):
+                    offending_groups.append("categorical_cols")
+                if any(
+                    col.col_name == self.id_col
+                    for col in (self.continuous_cols or [])
+                ):
+                    offending_groups.append("continuous_cols")
+
+                if offending_groups:
+                    groups = ", ".join(offending_groups)
+                    raise ValueError(
+                        f"Source '{self.name}' uses id_col '{self.id_col}' in feature configs "
+                        f"({groups}). Remove it from tokenizable feature columns."
+                    )
+
             raise ValueError(
                 f"Duplicate column names found across configs: {sorted(duplicates)}"
             )
@@ -191,14 +229,15 @@ class SourceConfig(BaseModel):
     def cols(self) -> list[str]:
         """All column names required from the source file."""
         names = [self.id_col]
-        for group in (self.timestamp_cols, self.categorical_cols, self.continuous_cols):
+        for group in (self.temporal_cols, self.categorical_cols, self.continuous_cols):
             if group:
                 names.extend(col.col_name for col in group)
         return names
 
     @property
-    def primary_timestamp(self) -> TimestampColConfig | None:
-        """The primary timestamp column config, if any."""
-        if not self.timestamp_cols:
+    def primary_temporal(self) -> TemporalColConfig | None:
+        """The primary temporal column config, if any."""
+        if not self.temporal_cols:
             return None
-        return next((col for col in self.timestamp_cols if col.is_primary), None)
+        return next((col for col in self.temporal_cols if col.is_primary), None)
+

@@ -44,7 +44,7 @@ from tab2seq.source.config import (
     CategoricalColConfig,
     ContinuousColConfig,
     SourceConfig,
-    TimestampColConfig,
+    TemporalColConfig,
 )
 
 logger = logging.getLogger(__name__)
@@ -442,8 +442,8 @@ REGISTRY_SPECS: dict[str, dict] = {
     "health": {
         "generator": _generate_health,
         "id_col": "entity_id",
-        "timestamp_cols": [
-            TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+        "temporal_cols": [
+            TemporalColConfig(col_name="date", is_primary=True, drop_na=True)
         ],
         "categorical_cols": [
             CategoricalColConfig(col_name="diagnosis", prefix="DIAG"),
@@ -458,8 +458,8 @@ REGISTRY_SPECS: dict[str, dict] = {
     "income": {
         "generator": _generate_income,
         "id_col": "entity_id",
-        "timestamp_cols": [
-            TimestampColConfig(col_name="year", is_primary=True, drop_na=True)
+        "temporal_cols": [
+            TemporalColConfig(col_name="year", is_primary=True, drop_na=True)
         ],
         "categorical_cols": [
             CategoricalColConfig(col_name="income_type", prefix="INCOME"),
@@ -472,9 +472,9 @@ REGISTRY_SPECS: dict[str, dict] = {
     "labour": {
         "generator": _generate_labour,
         "id_col": "entity_id",
-        "timestamp_cols": [
-            TimestampColConfig(col_name="date", is_primary=True, drop_na=True),
-            TimestampColConfig(col_name="birthday", is_primary=False, drop_na=False),
+        "temporal_cols": [
+            TemporalColConfig(col_name="date", is_primary=True, drop_na=True),
+            TemporalColConfig(col_name="birthday", is_primary=False, drop_na=False),
         ],
         "categorical_cols": [
             CategoricalColConfig(col_name="status", prefix="STATUS"),
@@ -488,8 +488,8 @@ REGISTRY_SPECS: dict[str, dict] = {
     "survey": {
         "generator": _generate_survey,
         "id_col": "entity_id",
-        "timestamp_cols": [
-            TimestampColConfig(col_name="survey_date", is_primary=True, drop_na=True)
+        "temporal_cols": [
+            TemporalColConfig(col_name="survey_date", is_primary=True, drop_na=True)
         ],
         "categorical_cols": [
             CategoricalColConfig(col_name="education_level", prefix="EDU"),
@@ -657,7 +657,7 @@ def generate_synthetic_collections(
                 name=name,
                 filepath=path,
                 id_col=spec["id_col"],
-                timestamp_cols=spec["timestamp_cols"],
+                temporal_cols=spec["temporal_cols"],
                 categorical_cols=spec["categorical_cols"],
                 continuous_cols=spec["continuous_cols"],
                 output_format=file_format,  # type: ignore[arg-type]

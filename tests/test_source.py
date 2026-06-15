@@ -13,7 +13,7 @@ from tab2seq.source import (
     Source,
     SourceCollection,
     SourceConfig,
-    TimestampColConfig,
+    TemporalColConfig,
 )
 
 
@@ -83,8 +83,8 @@ class TestSourceConfig:
             name="health",
             filepath=health_parquet_file,
             id_col="patient_id",
-            timestamp_cols=[
-                TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+            temporal_cols=[
+                TemporalColConfig(col_name="date", is_primary=True, drop_na=True)
             ],
             categorical_cols=[
                 CategoricalColConfig(col_name="diagnosis", prefix="DIAG"),
@@ -93,8 +93,8 @@ class TestSourceConfig:
         )
         assert config.name == "health"
         assert config.id_col == "patient_id"
-        assert len(config.timestamp_cols) == 1
-        assert config.timestamp_cols[0].col_name == "date"
+        assert len(config.temporal_cols) == 1
+        assert config.temporal_cols[0].col_name == "date"
         assert len(config.categorical_cols) == 2
         assert config.categorical_cols[0].col_name == "diagnosis"
         assert config.categorical_cols[1].col_name == "department"
@@ -107,8 +107,8 @@ class TestSourceConfig:
             name="health",
             filepath=health_parquet_file,
             id_col="patient_id",
-            timestamp_cols=[
-                TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+            temporal_cols=[
+                TemporalColConfig(col_name="date", is_primary=True, drop_na=True)
             ],
             categorical_cols=[
                 CategoricalColConfig(col_name="diagnosis", prefix="DIAG")
@@ -124,8 +124,8 @@ class TestSourceConfig:
             name="income",
             filepath=income_csv_file,
             id_col="person_id",
-            timestamp_cols=[
-                TimestampColConfig(col_name="year", is_primary=True, drop_na=True)
+            temporal_cols=[
+                TemporalColConfig(col_name="year", is_primary=True, drop_na=True)
             ],
             categorical_cols=[
                 CategoricalColConfig(col_name="income_type", prefix="INCOME")
@@ -142,8 +142,8 @@ class TestSourceConfig:
                 name="health",
                 filepath=health_parquet_file,
                 id_col="patient_id",
-                timestamp_cols=[
-                    TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+                temporal_cols=[
+                    TemporalColConfig(col_name="date", is_primary=True, drop_na=True)
                 ],
                 categorical_cols=[
                     CategoricalColConfig(col_name="diagnosis", prefix="DIAG")
@@ -158,8 +158,8 @@ class TestSourceConfig:
                 name="health",
                 filepath=Path("/nonexistent/file.parquet"),
                 id_col="patient_id",
-                timestamp_cols=[
-                    TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+                temporal_cols=[
+                    TemporalColConfig(col_name="date", is_primary=True, drop_na=True)
                 ],
                 categorical_cols=[
                     CategoricalColConfig(col_name="diagnosis", prefix="DIAG")
@@ -173,11 +173,45 @@ class TestSourceConfig:
                 name="health",
                 filepath=health_parquet_file,
                 id_col="patient_id",
-                timestamp_cols=[
-                    TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+                temporal_cols=[
+                    TemporalColConfig(col_name="date", is_primary=True, drop_na=True)
                 ],
                 categorical_cols=None,
                 continuous_cols=None,
+            )
+
+    def test_source_config_rejects_id_col_in_categorical_cols(self, health_parquet_file):
+        """SourceConfig should fail when id_col is reused as categorical feature."""
+        with pytest.raises(ValueError, match="uses id_col 'patient_id' in feature configs"):
+            SourceConfig(
+                name="health",
+                filepath=health_parquet_file,
+                id_col="patient_id",
+                temporal_cols=[
+                    TemporalColConfig(col_name="date", is_primary=True, drop_na=True)
+                ],
+                categorical_cols=[
+                    CategoricalColConfig(col_name="patient_id", prefix="PAT"),
+                    CategoricalColConfig(col_name="diagnosis", prefix="DIAG"),
+                ],
+            )
+
+    def test_source_config_rejects_id_col_in_continuous_cols(self, health_parquet_file):
+        """SourceConfig should fail when id_col is reused as continuous feature."""
+        with pytest.raises(ValueError, match="uses id_col 'patient_id' in feature configs"):
+            SourceConfig(
+                name="health",
+                filepath=health_parquet_file,
+                id_col="patient_id",
+                temporal_cols=[
+                    TemporalColConfig(col_name="date", is_primary=True, drop_na=True)
+                ],
+                categorical_cols=[
+                    CategoricalColConfig(col_name="diagnosis", prefix="DIAG")
+                ],
+                continuous_cols=[
+                    ContinuousColConfig(col_name="patient_id", prefix="PATIENT")
+                ],
             )
 
 
@@ -190,8 +224,8 @@ class TestSource:
             name="health",
             filepath=health_parquet_file,
             id_col="patient_id",
-            timestamp_cols=[
-                TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+            temporal_cols=[
+                TemporalColConfig(col_name="date", is_primary=True, drop_na=True)
             ],
             categorical_cols=[
                 CategoricalColConfig(col_name="diagnosis", prefix="DIAG"),
@@ -209,8 +243,8 @@ class TestSource:
             name="health",
             filepath=health_parquet_file,
             id_col="patient_id",
-            timestamp_cols=[
-                TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+            temporal_cols=[
+                TemporalColConfig(col_name="date", is_primary=True, drop_na=True)
             ],
             categorical_cols=[
                 CategoricalColConfig(col_name="diagnosis", prefix="DIAG"),
@@ -228,8 +262,8 @@ class TestSource:
             name="health",
             filepath=health_parquet_file,
             id_col="patient_id",
-            timestamp_cols=[
-                TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+            temporal_cols=[
+                TemporalColConfig(col_name="date", is_primary=True, drop_na=True)
             ],
             categorical_cols=[
                 CategoricalColConfig(col_name="diagnosis", prefix="DIAG"),
@@ -249,8 +283,8 @@ class TestSource:
             name="health",
             filepath=health_parquet_file,
             id_col="patient_id",
-            timestamp_cols=[
-                TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+            temporal_cols=[
+                TemporalColConfig(col_name="date", is_primary=True, drop_na=True)
             ],
             categorical_cols=[
                 CategoricalColConfig(col_name="diagnosis", prefix="DIAG")
@@ -267,8 +301,8 @@ class TestSource:
             name="health",
             filepath=health_parquet_file,
             id_col="patient_id",
-            timestamp_cols=[
-                TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+            temporal_cols=[
+                TemporalColConfig(col_name="date", is_primary=True, drop_na=True)
             ],
             categorical_cols=[
                 CategoricalColConfig(col_name="diagnosis", prefix="DIAG")
@@ -285,8 +319,8 @@ class TestSource:
             name="health",
             filepath=health_parquet_file,
             id_col="patient_id",
-            timestamp_cols=[
-                TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+            temporal_cols=[
+                TemporalColConfig(col_name="date", is_primary=True, drop_na=True)
             ],
             categorical_cols=[
                 CategoricalColConfig(col_name="diagnosis", prefix="DIAG")
@@ -303,8 +337,8 @@ class TestSource:
             name="health",
             filepath=health_parquet_file,
             id_col="patient_id",
-            timestamp_cols=[
-                TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+            temporal_cols=[
+                TemporalColConfig(col_name="date", is_primary=True, drop_na=True)
             ],
             categorical_cols=[
                 CategoricalColConfig(col_name="diagnosis", prefix="DIAG")
@@ -320,8 +354,8 @@ class TestSource:
             name="income",
             filepath=income_csv_file,
             id_col="person_id",
-            timestamp_cols=[
-                TimestampColConfig(col_name="year", is_primary=True, drop_na=True)
+            temporal_cols=[
+                TemporalColConfig(col_name="year", is_primary=True, drop_na=True)
             ],
             categorical_cols=[
                 CategoricalColConfig(col_name="income_type", prefix="INCOME")
@@ -340,8 +374,8 @@ class TestSource:
             name="health",
             filepath=health_parquet_file,
             id_col="patient_id",
-            timestamp_cols=[
-                TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+            temporal_cols=[
+                TemporalColConfig(col_name="date", is_primary=True, drop_na=True)
             ],
             categorical_cols=[
                 CategoricalColConfig(col_name="diagnosis", prefix="DIAG")
@@ -360,8 +394,8 @@ class TestSource:
             name="health",
             filepath=health_parquet_file,
             id_col="patient_id",
-            timestamp_cols=[
-                TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+            temporal_cols=[
+                TemporalColConfig(col_name="date", is_primary=True, drop_na=True)
             ],
             categorical_cols=[
                 CategoricalColConfig(col_name="diagnosis", prefix="DIAG"),
@@ -388,8 +422,8 @@ class TestSource:
                 name="health",
                 filepath=health_parquet_file,
                 id_col="patient_id",
-                timestamp_cols=[
-                    TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+                temporal_cols=[
+                    TemporalColConfig(col_name="date", is_primary=True, drop_na=True)
                 ],
                 categorical_cols=[
                     CategoricalColConfig(col_name="diagnosis", prefix="DIAG")
@@ -426,8 +460,8 @@ class TestSource:
                 name="income",
                 filepath=income_csv_file,
                 id_col="person_id",
-                timestamp_cols=[
-                    TimestampColConfig(col_name="year", is_primary=True, drop_na=True)
+                temporal_cols=[
+                    TemporalColConfig(col_name="year", is_primary=True, drop_na=True)
                 ],
                 categorical_cols=[
                     CategoricalColConfig(col_name="income_type", prefix="INCOME")
@@ -462,8 +496,8 @@ class TestSourceCollection:
             name="health",
             filepath=health_parquet_file,
             id_col="patient_id",
-            timestamp_cols=[
-                TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+            temporal_cols=[
+                TemporalColConfig(col_name="date", is_primary=True, drop_na=True)
             ],
             categorical_cols=[
                 CategoricalColConfig(col_name="diagnosis", prefix="DIAG")
@@ -480,8 +514,8 @@ class TestSourceCollection:
                 name="health",
                 filepath=health_parquet_file,
                 id_col="patient_id",
-                timestamp_cols=[
-                    TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+                temporal_cols=[
+                    TemporalColConfig(col_name="date", is_primary=True, drop_na=True)
                 ],
                 categorical_cols=[
                     CategoricalColConfig(col_name="diagnosis", prefix="DIAG")
@@ -491,8 +525,8 @@ class TestSourceCollection:
                 name="income",
                 filepath=income_csv_file,
                 id_col="person_id",
-                timestamp_cols=[
-                    TimestampColConfig(col_name="year", is_primary=True, drop_na=True)
+                temporal_cols=[
+                    TemporalColConfig(col_name="year", is_primary=True, drop_na=True)
                 ],
                 categorical_cols=[
                     CategoricalColConfig(col_name="income_type", prefix="INCOME")
@@ -511,8 +545,8 @@ class TestSourceCollection:
             name="health",
             filepath=health_parquet_file,
             id_col="patient_id",
-            timestamp_cols=[
-                TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+            temporal_cols=[
+                TemporalColConfig(col_name="date", is_primary=True, drop_na=True)
             ],
             categorical_cols=[
                 CategoricalColConfig(col_name="diagnosis", prefix="DIAG")
@@ -528,8 +562,8 @@ class TestSourceCollection:
             name="health",
             filepath=health_parquet_file,
             id_col="patient_id",
-            timestamp_cols=[
-                TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+            temporal_cols=[
+                TemporalColConfig(col_name="date", is_primary=True, drop_na=True)
             ],
             categorical_cols=[
                 CategoricalColConfig(col_name="diagnosis", prefix="DIAG")
@@ -546,8 +580,8 @@ class TestSourceCollection:
                 name="health",
                 filepath=health_parquet_file,
                 id_col="patient_id",
-                timestamp_cols=[
-                    TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+                temporal_cols=[
+                    TemporalColConfig(col_name="date", is_primary=True, drop_na=True)
                 ],
                 categorical_cols=[
                     CategoricalColConfig(col_name="diagnosis", prefix="DIAG")
@@ -557,8 +591,8 @@ class TestSourceCollection:
                 name="income",
                 filepath=income_csv_file,
                 id_col="person_id",
-                timestamp_cols=[
-                    TimestampColConfig(col_name="year", is_primary=True, drop_na=True)
+                temporal_cols=[
+                    TemporalColConfig(col_name="year", is_primary=True, drop_na=True)
                 ],
                 categorical_cols=[
                     CategoricalColConfig(col_name="income_type", prefix="INCOME")
@@ -576,8 +610,8 @@ class TestSourceCollection:
             name="health",
             filepath=health_parquet_file,
             id_col="patient_id",
-            timestamp_cols=[
-                TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+            temporal_cols=[
+                TemporalColConfig(col_name="date", is_primary=True, drop_na=True)
             ],
             categorical_cols=[
                 CategoricalColConfig(col_name="diagnosis", prefix="DIAG")
@@ -593,8 +627,8 @@ class TestSourceCollection:
                 name="health",
                 filepath=health_parquet_file,
                 id_col="patient_id",
-                timestamp_cols=[
-                    TimestampColConfig(col_name="date", is_primary=True, drop_na=True)
+                temporal_cols=[
+                    TemporalColConfig(col_name="date", is_primary=True, drop_na=True)
                 ],
                 categorical_cols=[
                     CategoricalColConfig(col_name="diagnosis", prefix="DIAG")
@@ -604,8 +638,8 @@ class TestSourceCollection:
                 name="income",
                 filepath=income_csv_file,
                 id_col="person_id",
-                timestamp_cols=[
-                    TimestampColConfig(col_name="year", is_primary=True, drop_na=True)
+                temporal_cols=[
+                    TemporalColConfig(col_name="year", is_primary=True, drop_na=True)
                 ],
                 categorical_cols=[
                     CategoricalColConfig(col_name="income_type", prefix="INCOME")
@@ -626,7 +660,7 @@ sources:
   - name: health
     filepath: {health_parquet_file}
     id_col: patient_id
-    timestamp_cols:
+    temporal_cols:
       - col_name: date
         is_primary: true
         drop_na: true
@@ -642,7 +676,7 @@ sources:
   - name: income
     filepath: {income_csv_file}
     id_col: person_id
-    timestamp_cols:
+    temporal_cols:
       - col_name: year
         is_primary: true
         drop_na: true
