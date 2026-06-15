@@ -79,7 +79,7 @@ Each `Source` describes one event table: its file path, ID column, timestamp, an
 ```python
 from tab2seq.source import (
     Source, SourceCollection, SourceConfig,
-    CategoricalColConfig, ContinuousColConfig, TimestampColConfig,
+    CategoricalColConfig, ContinuousColConfig, TemporalColConfig,
 )
 
 configs = [
@@ -96,8 +96,9 @@ configs = [
             ContinuousColConfig(col_name="cost", prefix="COST", n_bins=20),
             ContinuousColConfig(col_name="length_of_stay", prefix="LOS", n_bins=10),
         ],
-        timestamp_cols=[
-            TimestampColConfig(col_name="date", is_primary=True, drop_na=True),
+        temporal_cols=[
+            TemporalColConfig(col_name="date", is_primary=True, drop_na=True, 
+            col_type='datetime'),
         ],
     ),
     SourceConfig(
@@ -113,9 +114,11 @@ configs = [
         continuous_cols=[
             ContinuousColConfig(col_name="weekly_hours", prefix="WEEKLY_HOURS", n_bins=10),
         ],
-        timestamp_cols=[
-            TimestampColConfig(col_name="date", is_primary=True, drop_na=True),
-            TimestampColConfig(col_name="birthday", static=True, drop_na=True),
+        temporal_cols=[
+            TemporalColConfig(col_name="date", is_primary=True, drop_na=True, 
+            col_type='datetime'),
+            TemporalColConfig(col_name="birthday", static=True, drop_na=True, 
+            col_type='datetime'),
         ],
     ),
 ]
