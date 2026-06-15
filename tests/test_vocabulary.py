@@ -1,11 +1,10 @@
-"""Tests for train-split vocabulary builder."""
+"""Tests for the vocabulary-first tokenization pipeline."""
 
 from pathlib import Path
 
 import polars as pl
 
 from tab2seq.cohort import Cohort, CohortConfig, EntityInclusionCriteria
-from tab2seq.config import TokenizerConfig
 from tab2seq.source import (
     CategoricalColConfig,
     ContinuousColConfig,
@@ -13,10 +12,10 @@ from tab2seq.source import (
     SourceConfig,
     TemporalColConfig,
 )
-from tab2seq.tokenization import Vocabulary
+from tab2seq.tokenization import Vocabulary, VocabularyConfig
 
 
-def _build_collection(tmp_path: Path) -> SourceCollection:
+def _build_source_collection(tmp_path: Path) -> SourceCollection:
     health_df = pl.DataFrame(
         {
             "entity_id": ["E1", "E1", "E2", "E3", "E4"],
@@ -88,9 +87,9 @@ def _build_collection(tmp_path: Path) -> SourceCollection:
     return SourceCollection.from_configs(configs)
 
 
-def test_vocabulary_fit_and_cache(tmp_path: Path):
-    """Vocabulary is built from train split and persisted under cohort cache."""
-    collection = _build_collection(tmp_path)
+def test_fit_from_cohort_train_builds_and_caches_vocabulary(tmp_path: Path):
+    """fit_from_cohort_train builds and caches vocabulary artifacts."""
+    collection = _build_source_collection(tmp_path)
     cohort = Cohort(
         name="vocab-cohort",
         sources=collection,
@@ -101,9 +100,8 @@ def test_vocabulary_fit_and_cache(tmp_path: Path):
     )
 
     split_cfg = CohortConfig(train_frac=0.5, val_frac=0.25, test_frac=0.25, seed=13)
-    tok_cfg = TokenizerConfig()
-    tok_cfg.vocabulary.min_token_count = 1
-    vocab = Vocabulary(tok_cfg.vocabulary)
+    vocab_cfg = VocabularyConfig(min_token_count=1)
+    vocab = Vocabulary(vocab_cfg)
     vocab_df = vocab.fit_from_cohort_train(cohort, split_cfg, force_recompute=True)
 
     assert vocab_df.height > 0
@@ -125,14 +123,14 @@ def test_vocabulary_fit_and_cache(tmp_path: Path):
     )
 
     # Re-load from cache path
-    vocab_reload = Vocabulary(tok_cfg.vocabulary)
+    vocab_reload = Vocabulary(vocab_cfg)
     cached_df = vocab_reload.fit_from_cohort_train(cohort, split_cfg, force_recompute=False)
     assert cached_df.height == vocab_df.height
 
 
-def test_vocabulary_train_only_behavior(tmp_path: Path):
-    """Vocabulary tokens should come from train split entities only."""
-    collection = _build_collection(tmp_path)
+def test_fit_from_cohort_train_uses_train_split_only(tmp_path: Path):
+    """Vocabulary tokens are derived only from train-split entities."""
+    collection = _build_source_collection(tmp_path)
     cohort = Cohort(name="train-only", sources=collection, cache_dir=tmp_path / "cohorts")
 
     split_cfg = CohortConfig(train_frac=0.25, val_frac=0.25, test_frac=0.5, seed=99)
@@ -142,9 +140,7 @@ def test_vocabulary_train_only_behavior(tmp_path: Path):
         split_df.filter(pl.col("split") == "train").get_column("entity_id").to_list()
     )
 
-    tok_cfg = TokenizerConfig()
-    tok_cfg.vocabulary.min_token_count = 1
-    vocab = Vocabulary(tok_cfg.vocabulary)
+    vocab = Vocabulary(VocabularyConfig(min_token_count=1))
     vocab.fit_from_cohort_train(cohort, split_cfg, force_recompute=True)
 
     # Build diagnosis values actually present in train set for comparison

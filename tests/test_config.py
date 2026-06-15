@@ -17,7 +17,8 @@ from tab2seq.tokenization.config import VocabularyConfig
 def test_tokenizer_config_defaults():
     """Test default tokenizer configuration."""
     config = TokenizerConfig()
-    assert config.vocab_size == 10000
+    assert config.id_columns == ["entity_id"]
+    assert config.exclude_columns == []
     assert config.pad_token == "[PAD]"
     assert config.unk_token == "[UNK]"
     assert config.cls_token == "[CLS]"
@@ -57,7 +58,7 @@ def test_config_defaults():
 def test_config_yaml_roundtrip():
     """Test saving and loading configuration from YAML."""
     config = Config()
-    config.tokenizer.vocab_size = 5000
+    config.tokenizer.exclude_columns = ["timestamp"]
     config.tokenizer.vocabulary.max_vocab_size = 20000
     config.loader.chunk_size = 5000
     config.processor.batch_size = 64
@@ -67,7 +68,7 @@ def test_config_yaml_roundtrip():
         config.to_yaml(yaml_path)
 
         loaded_config = Config.from_yaml(yaml_path)
-        assert loaded_config.tokenizer.vocab_size == 5000
+        assert loaded_config.tokenizer.exclude_columns == ["timestamp"]
         assert loaded_config.tokenizer.vocabulary.max_vocab_size == 20000
         assert loaded_config.loader.chunk_size == 5000
         assert loaded_config.processor.batch_size == 64

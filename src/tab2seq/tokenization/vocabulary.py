@@ -1,9 +1,16 @@
-"""Polars-based vocabulary builder tied to cohort train split."""
+"""Polars-based vocabulary builder tied to cohort train split.
+
+Token naming convention (``__`` as delimiter, source name never contains ``__``):
+
+- Categorical:  ``{source_name}__{col}__{value}``
+- Continuous:   ``{source_name}__{col}__BIN_{bin_index}``
+- Special:      ``[PAD]``, ``[UNK]``, ``[CLS]``, ``[SEP]``, ``[MASK]``
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -18,7 +25,7 @@ from .config import VocabularyConfig
 
 @dataclass
 class VocabularyArtifacts:
-    """Paths to persisted vocabulary artifacts."""
+    """Paths to persisted vocabulary artifacts on disk."""
 
     directory: Path
     vocab_path: Path
@@ -27,16 +34,46 @@ class VocabularyArtifacts:
 
 
 class Vocabulary:
-    """Build and cache token vocabulary using cohort train split entities only."""
+    """Build and cache a token vocabulary from cohort train-split data.
 
-    def __init__(
-        self,
-        config: VocabularyConfig | None = None,
-    ) -> None:
+    The vocabulary is fitted **exclusively on train-split entities** to prevent
+    information leakage from validation/test splits into the token representation.
+    Continuous columns are quantile-binned; bin edges are stored alongside the
+    vocabulary so the :class:`~tab2seq.tokenizer.tokenizer.Tokenizer` can apply
+    identical binning at encode time.
+
+    Attributes:
+        config: Vocabulary configuration.
+        vocab_df: DataFrame with schema
+            ``[token_id, token, pretty_token, category, source_name,
+            column_name, transform, count]``.
+        bin_edges_df: DataFrame with schema
+            ``[source_name, column_name, bin_index, left, right]``.
+        metadata: Build metadata dict (hashes, counts, timestamp).
+
+    Example::
+
+        vocab = Vocabulary(VocabularyConfig(max_vocab_size=50_000, min_token_count=5))
+        vocab_df = vocab.fit_from_cohort_train(cohort)
+
+        # Inspect
+        print(vocab.vocab_df.head())
+        print(vocab.column_categories("hospital"))
+        # → {"diagnosis": "categorical", "age_at_event": "continuous_bin", ...}
+
+        edges = vocab.bin_edges_for("hospital", "age_at_event")
+        # → np.ndarray([18.0, 35.2, 51.7, ..., 97.4])
+    """
+
+    def __init__(self, config: VocabularyConfig | None = None) -> None:
         self.config = config or VocabularyConfig()
         self.vocab_df: pl.DataFrame | None = None
         self.bin_edges_df: pl.DataFrame | None = None
         self.metadata: dict[str, Any] | None = None
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def fit_from_cohort_train(
         self,
@@ -44,14 +81,20 @@ class Vocabulary:
         split_config: CohortConfig | None = None,
         force_recompute: bool = False,
     ) -> pl.DataFrame:
-        """Build vocabulary from train split rows and persist to cohort cache."""
+        """Build the vocabulary from train-split rows and persist to cache.
+
+        Args:
+            cohort: Cohort with source collection and optional cache directory.
+            split_config: Train/val/test fractions. Defaults to 70/15/15.
+            force_recompute: Ignore cached artifacts and rebuild from scratch.
+
+        Returns:
+            ``vocab_df`` DataFrame (also stored as ``self.vocab_df``).
+        """
         split_cfg = split_config or CohortConfig(
-            train_frac=0.7,
-            val_frac=0.15,
-            test_frac=0.15,
+            train_frac=0.7, val_frac=0.15, test_frac=0.15
         )
         split_df = cohort.build_or_load_splits(split_cfg, force_recompute=force_recompute)
-
         train_ids = self._resolve_train_ids(split_df)
         vocab_hash = self._vocab_hash(cohort, split_cfg)
         artifacts = self._artifact_paths(cohort, vocab_hash)
@@ -63,40 +106,46 @@ class Vocabulary:
             and artifacts.metadata_path.exists()
             and artifacts.bin_edges_path.exists()
         ):
-            self.vocab_df = self._ensure_pretty_token_column(pl.read_parquet(artifacts.vocab_path))
+            self.vocab_df = self._ensure_pretty_token_column(
+                pl.read_parquet(artifacts.vocab_path)
+            )
             self.bin_edges_df = pl.read_parquet(artifacts.bin_edges_path)
-            self.metadata = json.loads(artifacts.metadata_path.read_text(encoding="utf-8"))
+            self.metadata = json.loads(
+                artifacts.metadata_path.read_text(encoding="utf-8")
+            )
             return self.vocab_df
 
         token_counts: dict[tuple[str, str, str, str], int] = {}
         bin_edges_rows: list[dict[str, Any]] = []
-        sources = self._cohort_sources(cohort)
 
-        for source in sources:
+        for source in self._cohort_sources(cohort):
             lf = source.scan().filter(
                 pl.col(source.config.id_col).cast(pl.Utf8).is_in(train_ids)
             )
-            token_counts = self._collect_categorical_tokens(lf, source.name, source.config.categorical_cols, token_counts)
+            token_counts = self._collect_categorical_tokens(
+                lf, source.name, source.config.categorical_cols, token_counts
+            )
             token_counts, new_edges = self._collect_continuous_tokens(
-                lf,
-                source.name,
-                source.config.continuous_cols,
-                token_counts,
+                lf, source.name, source.config.continuous_cols, token_counts
             )
             bin_edges_rows.extend(new_edges)
 
-        rows = self._compose_vocab_rows(token_counts)
-        vocab_df = self._ensure_pretty_token_column(pl.DataFrame(rows).sort("token_id"))
-        bin_edges_df = pl.DataFrame(bin_edges_rows) if bin_edges_rows else pl.DataFrame(
-            {
-                "source_name": pl.Series([], dtype=pl.Utf8),
-                "column_name": pl.Series([], dtype=pl.Utf8),
-                "bin_index": pl.Series([], dtype=pl.Int64),
-                "left": pl.Series([], dtype=pl.Float64),
-                "right": pl.Series([], dtype=pl.Float64),
-            }
+        vocab_df = self._ensure_pretty_token_column(
+            pl.DataFrame(self._compose_vocab_rows(token_counts)).sort("token_id")
         )
-
+        bin_edges_df = (
+            pl.DataFrame(bin_edges_rows)
+            if bin_edges_rows
+            else pl.DataFrame(
+                {
+                    "source_name": pl.Series([], dtype=pl.Utf8),
+                    "column_name": pl.Series([], dtype=pl.Utf8),
+                    "bin_index": pl.Series([], dtype=pl.Int64),
+                    "left": pl.Series([], dtype=pl.Float64),
+                    "right": pl.Series([], dtype=pl.Float64),
+                }
+            )
+        )
         metadata = {
             "cohort_name": cohort.name,
             "vocab_hash": vocab_hash,
@@ -126,42 +175,97 @@ class Vocabulary:
 
     @property
     def token2index(self) -> dict[str, int]:
-        """Mapping from token string to token id."""
+        """Mapping from token string to integer ID."""
         if self.vocab_df is None:
             return {}
         return dict(
             zip(
-                self.vocab_df.get_column("token").to_list(),
-                self.vocab_df.get_column("token_id").to_list(),
+                self.vocab_df["token"].to_list(),
+                self.vocab_df["token_id"].to_list(),
             )
         )
 
     @property
     def index2token(self) -> dict[int, str]:
-        """Mapping from token id to token string."""
+        """Mapping from integer ID to token string."""
         if self.vocab_df is None:
             return {}
         return dict(
             zip(
-                self.vocab_df.get_column("token_id").to_list(),
-                self.vocab_df.get_column("token").to_list(),
+                self.vocab_df["token_id"].to_list(),
+                self.vocab_df["token"].to_list(),
             )
         )
 
-    def _resolve_train_ids(self, split_df: pl.DataFrame) -> list[str]:
-        split_values = set(split_df.get_column("split").to_list())
-        split_name = "train" if "train" in split_values else "all"
-        return (
-            split_df.filter(pl.col("split") == split_name)
-            .get_column("entity_id")
-            .cast(pl.Utf8)
-            .to_list()
+    def column_categories(self, source_name: str) -> dict[str, str]:
+        """Return ``{column_name: category}`` for all feature columns in a source.
+
+        Categories are ``"categorical"`` or ``"continuous_bin"``.
+        Special tokens (``source_name == "__special__"``) are excluded.
+
+        This is the primary way :class:`~tab2seq.tokenizer.tokenizer.Tokenizer`
+        discovers which columns are continuous vs. categorical for a given source.
+
+        Args:
+            source_name: Source name as registered in the cohort.
+
+        Returns:
+            Dict mapping column name to its token category string.
+            Empty dict if vocabulary has not been fitted yet.
+        """
+        if self.vocab_df is None:
+            return {}
+        sub = (
+            self.vocab_df
+            .filter(pl.col("source_name") == source_name)
+            .select(["column_name", "category"])
+            .unique()
         )
+        return dict(zip(sub["column_name"].to_list(), sub["category"].to_list()))
+
+    def bin_edges_for(self, source_name: str, col_name: str) -> np.ndarray | None:
+        """Return bin edges for a continuous column as a sorted 1-D array.
+
+        The array has shape ``(n_bins + 1,)`` and is compatible with
+        ``np.searchsorted(edges, value, side='right') - 1`` to reproduce
+        the same bin assignments made during :meth:`fit_from_cohort_train`.
+
+        Args:
+            source_name: Source name as registered in the cohort.
+            col_name: Column name of the continuous variable.
+
+        Returns:
+            Edge array of shape ``(n_bins + 1,)``, or ``None`` if no bin
+            edges exist for this source/column combination.
+        """
+        if self.bin_edges_df is None or self.bin_edges_df.is_empty():
+            return None
+        sub = (
+            self.bin_edges_df
+            .filter(
+                (pl.col("source_name") == source_name)
+                & (pl.col("column_name") == col_name)
+            )
+            .sort("bin_index")
+        )
+        if sub.is_empty():
+            return None
+        # Reconstruct full edge array from stored (left, right) pairs.
+        # Each bin i has left=edges[i], right=edges[i+1], so the full
+        # array is lefts + [right of last bin].
+        lefts = sub["left"].to_numpy()
+        right_last = float(sub["right"][-1])
+        return np.append(lefts, right_last)
+
+    # ------------------------------------------------------------------
+    # Private helpers — vocabulary construction
+    # ------------------------------------------------------------------
 
     def _compose_vocab_rows(
         self,
         token_counts: dict[tuple[str, str, str, str], int],
     ) -> list[dict[str, Any]]:
+        """Assemble vocab rows from token counts, prepending special tokens."""
         rows: list[dict[str, Any]] = []
         token_id = 0
 
@@ -185,6 +289,7 @@ class Vocabulary:
             for key, count in token_counts.items()
             if count >= self.config.min_token_count
         ]
+        # Sort by (source, column, token) for deterministic ordering.
         sortable.sort(key=lambda x: (x[0][0], x[0][1], x[0][3]))
 
         for (source_name, column_name, category, token), count in sortable:
@@ -213,6 +318,7 @@ class Vocabulary:
         categorical_cols: list[Any] | None,
         token_counts: dict[tuple[str, str, str, str], int],
     ) -> dict[tuple[str, str, str, str], int]:
+        """Count occurrences of each categorical token in the train split."""
         if not categorical_cols:
             return token_counts
 
@@ -227,8 +333,8 @@ class Vocabulary:
             )
             for row in counts.iter_rows(named=True):
                 token = f"{source_name}__{col}__{row[col]}"
-                key = (source_name, col, "categorical", token)
-                token_counts[key] = int(row["len"])
+                token_counts[(source_name, col, "categorical", token)] = int(row["len"])
+
         return token_counts
 
     def _collect_continuous_tokens(
@@ -238,6 +344,12 @@ class Vocabulary:
         continuous_cols: list[Any] | None,
         token_counts: dict[tuple[str, str, str, str], int],
     ) -> tuple[dict[tuple[str, str, str, str], int], list[dict[str, Any]]]:
+        """Quantile-bin continuous columns, count bin occupancy, store edges.
+
+        Bin edges are computed from train-split quantiles only (leakage-safe).
+        ``np.unique`` is applied to edges to handle degenerate distributions
+        (e.g. many identical values compressing the quantile grid).
+        """
         if not continuous_cols:
             return token_counts, []
 
@@ -246,30 +358,28 @@ class Vocabulary:
         for col_cfg in continuous_cols:
             col = col_cfg.col_name
             n_bins = col_cfg.n_bins
+
             values = (
                 lf.select(pl.col(col).cast(pl.Float64).alias(col))
                 .drop_nulls()
-                .collect()
-                .get_column(col)
+                .collect()[col]
                 .to_numpy()
             )
             if values.size == 0:
                 continue
 
-            quantiles = np.linspace(0.0, 1.0, n_bins + 1)
-            edges = np.quantile(values, quantiles)
-            edges = np.unique(edges)
+            edges = np.unique(np.quantile(values, np.linspace(0.0, 1.0, n_bins + 1)))
             if edges.size < 2:
                 continue
 
-            bin_idx = np.searchsorted(edges, values, side="right") - 1
-            bin_idx = np.clip(bin_idx, 0, edges.size - 2)
-            unique_bins, counts = np.unique(bin_idx, return_counts=True)
-
-            for idx, count in zip(unique_bins.tolist(), counts.tolist()):
-                token = f"{source_name}__{col}__BIN_{idx}"
-                key = (source_name, col, "continuous_bin", token)
-                token_counts[key] = int(count)
+            bin_idx = np.clip(
+                np.searchsorted(edges, values, side="right") - 1,
+                0,
+                edges.size - 2,
+            )
+            for idx, count in zip(*np.unique(bin_idx, return_counts=True)):
+                token = f"{source_name}__{col}__BIN_{int(idx)}"
+                token_counts[(source_name, col, "continuous_bin", token)] = int(count)
 
             for i in range(edges.size - 1):
                 edge_rows.append(
@@ -284,18 +394,19 @@ class Vocabulary:
 
         return token_counts, edge_rows
 
-    @staticmethod
-    def _coerce_to_date(value: Any) -> date:
-        if isinstance(value, date) and not isinstance(value, datetime):
-            return value
-        if isinstance(value, datetime):
-            return value.date()
-        if isinstance(value, str):
-            try:
-                return datetime.fromisoformat(value).date()
-            except ValueError:
-                return date.fromisoformat(value)
-        raise TypeError(f"Unsupported datetime value: {type(value).__name__}")
+    # ------------------------------------------------------------------
+    # Private helpers — hashing and paths
+    # ------------------------------------------------------------------
+
+    def _resolve_train_ids(self, split_df: pl.DataFrame) -> list[str]:
+        split_values = set(split_df["split"].to_list())
+        split_name = "train" if "train" in split_values else "all"
+        return (
+            split_df
+            .filter(pl.col("split") == split_name)["entity_id"]
+            .cast(pl.Utf8)
+            .to_list()
+        )
 
     def _vocab_hash(self, cohort: Cohort, split_cfg: CohortConfig) -> str:
         sources = self._cohort_sources(cohort)
@@ -309,15 +420,9 @@ class Vocabulary:
                 for source in sources
             },
         }
-        return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
-
-    @staticmethod
-    def _cohort_sources(cohort: Cohort) -> Any:
-        if hasattr(cohort, "collection"):
-            return cohort.collection
-        if hasattr(cohort, "_collection"):
-            return cohort._collection
-        raise AttributeError("Cohort object does not expose a source collection")
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True).encode()
+        ).hexdigest()[:16]
 
     def _config_hash(self) -> str:
         payload = {
@@ -325,25 +430,9 @@ class Vocabulary:
             "min_token_count": self.config.min_token_count,
             "special_tokens": self.config.special_tokens,
         }
-        return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
-
-    @staticmethod
-    def _make_pretty_token(token: str, source_name: str) -> str:
-        prefix = f"{source_name}__"
-        if token.startswith(prefix):
-            return token[len(prefix) :]
-        return token
-
-    @staticmethod
-    def _ensure_pretty_token_column(vocab_df: pl.DataFrame) -> pl.DataFrame:
-        if "pretty_token" in vocab_df.columns:
-            return vocab_df
-        return vocab_df.with_columns(
-            pl.when(pl.col("source_name") == "__special__")
-            .then(pl.col("token"))
-            .otherwise(pl.col("token").str.split_exact("__", 1).struct.field("field_1"))
-            .alias("pretty_token")
-        )
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True).encode()
+        ).hexdigest()[:16]
 
     def _artifact_paths(self, cohort: Cohort, vocab_hash: str) -> VocabularyArtifacts:
         base = cohort.vocabulary_cache_dir(vocab_hash)
@@ -356,4 +445,36 @@ class Vocabulary:
             vocab_path=base / "vocab.parquet",
             metadata_path=base / "metadata.json",
             bin_edges_path=base / "bin_edges.parquet",
+        )
+
+    # ------------------------------------------------------------------
+    # Private helpers — static utilities
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _cohort_sources(cohort: Cohort) -> Any:
+        if hasattr(cohort, "collection"):
+            return cohort.collection
+        if hasattr(cohort, "_collection"):
+            return cohort._collection
+        raise AttributeError("Cohort object does not expose a source collection.")
+
+    @staticmethod
+    def _make_pretty_token(token: str, source_name: str) -> str:
+        """Strip the ``{source_name}__`` prefix for human-readable display."""
+        prefix = f"{source_name}__"
+        return token[len(prefix):] if token.startswith(prefix) else token
+
+    @staticmethod
+    def _ensure_pretty_token_column(vocab_df: pl.DataFrame) -> pl.DataFrame:
+        """Add ``pretty_token`` column if absent (e.g. after loading from cache)."""
+        if "pretty_token" in vocab_df.columns:
+            return vocab_df
+        return vocab_df.with_columns(
+            pl.when(pl.col("source_name") == "__special__")
+            .then(pl.col("token"))
+            .otherwise(
+                pl.col("token").str.split_exact("__", 1).struct.field("field_1")
+            )
+            .alias("pretty_token")
         )

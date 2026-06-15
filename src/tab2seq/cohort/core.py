@@ -325,6 +325,32 @@ class Cohort:
             metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
         return split_df
+    
+    
+    def load_split_config(self, split_hash: str) -> CohortConfig:
+        """Reconstruct the CohortConfig used to generate a specific split.
+
+        Args:
+            split_hash: Hash from ``CohortConfig.config_hash()``, as stored
+                in vocabulary metadata.
+
+        Returns:
+            The original ``CohortConfig`` used when the split was built.
+
+        Raises:
+            FileNotFoundError: If no cached split metadata exists for this hash.
+            ValueError: If cache is disabled on this cohort.
+        """
+        if not self.use_cache or self._cache_dir is None:
+            raise ValueError("Cannot load split config — caching is disabled on this cohort.")
+        meta_path = self._cache_dir / "splits" / split_hash / "metadata.json"
+        if not meta_path.exists():
+            raise FileNotFoundError(
+                f"No cached split metadata found for hash '{split_hash}' at {meta_path}. "
+                "Ensure the cohort was built with caching enabled."
+            )
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        return CohortConfig(**meta["split_config"])
 
     # ------------------------------------------------------------------
     # Cache paths

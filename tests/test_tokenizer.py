@@ -1,208 +1,262 @@
 """Tests for tokenizer module."""
 
+from pathlib import Path
+
 import polars as pl
-import pytest
 
-from tab2seq.config import TokenizerConfig
 from tab2seq import Tokenizer
+from tab2seq.cohort import Cohort, CohortConfig
+from tab2seq.config import TokenizerConfig
+from tab2seq.source import (
+    CategoricalColConfig,
+    ContinuousColConfig,
+    SourceCollection,
+    SourceConfig,
+    TemporalColConfig,
+)
+from tab2seq.tokenization import Vocabulary
 
 
-@pytest.fixture
-def sample_events():
-    """Create sample event dataframes."""
-    return [
-        pl.DataFrame(
-            {
-                "event_type": ["A", "B", "A"],
-                "value": [10, 20, 15],
-            }
-        ),
-        pl.DataFrame(
-            {
-                "event_type": ["B", "C"],
-                "value": [25, 30],
-            }
-        ),
-    ]
-
-
-def test_tokenizer_initialization():
-    """Test Tokenizer initialization."""
-    tokenizer = Tokenizer()
-    assert tokenizer.vocab_size >= 5  # At least special tokens
-
-
-def test_tokenizer_special_tokens():
-    """Test special tokens are in vocabulary."""
-    config = TokenizerConfig()
-    tokenizer = Tokenizer(config)
-
-    assert config.pad_token in tokenizer.vocab
-    assert config.unk_token in tokenizer.vocab
-    assert config.cls_token in tokenizer.vocab
-    assert config.sep_token in tokenizer.vocab
-    assert config.mask_token in tokenizer.vocab
-
-
-def test_fit_builds_vocabulary(sample_events):
-    """Test that fit builds vocabulary from events."""
-    tokenizer = Tokenizer()
-    initial_size = tokenizer.vocab_size
-
-    tokenizer.fit(sample_events)
-
-    assert tokenizer.vocab_size > initial_size
-    assert "event_type_A" in tokenizer.vocab
-    assert "event_type_B" in tokenizer.vocab
-    assert "value_10" in tokenizer.vocab
-
-
-def test_fit_respects_vocab_size():
-    """Test that fit respects maximum vocabulary size."""
-    config = TokenizerConfig(vocab_size=10)  # Very small vocab
-    tokenizer = Tokenizer(config)
-
-    # Create many unique events
-    events = [
-        pl.DataFrame(
-            {
-                "event_type": [f"E{i}" for i in range(100)],
-                "value": list(range(100)),
-            }
-        )
-    ]
-
-    tokenizer.fit(events)
-    assert tokenizer.vocab_size <= 10
-
-
-def test_encode_single_event():
-    """Test encoding a single person's events."""
-    tokenizer = Tokenizer()
-    events = pl.DataFrame(
+def _build_source_collection(tmp_path: Path) -> SourceCollection:
+    events_df = pl.DataFrame(
         {
-            "event_type": ["A", "B"],
-            "value": [10, 20],
+            "entity_id": ["E1", "E1", "E2", "E3"],
+            "wave": [1, 2, 1, 1],
+            "event_date": [
+                "2024-01-01",
+                "2024-02-01",
+                "2024-01-15",
+                "2024-02-10",
+            ],
+            "event_type": ["A", "B", "A", "C"],
+            "status": ["x", "y", "z", "x"],
+            "cost": [10.0, 20.0, 30.0, 40.0],
         }
     )
 
-    tokenizer.fit([events])
-    token_ids = tokenizer.encode(events)
+    events_path = tmp_path / "events.parquet"
+    events_df.write_parquet(events_path)
 
-    # Should have CLS + tokens + SEP
-    assert token_ids[0] == tokenizer.vocab[tokenizer.config.cls_token]
-    assert token_ids[-1] == tokenizer.vocab[tokenizer.config.sep_token]
-    assert len(token_ids) > 2
+    return SourceCollection.from_configs(
+        [
+            SourceConfig(
+                name="events",
+                filepath=events_path,
+                id_col="entity_id",
+                temporal_cols=[
+                    TemporalColConfig(col_name="event_date", is_primary=True, drop_na=True),
+                    TemporalColConfig(col_name="wave", col_type="ordinal"),
+                ],
+                categorical_cols=[
+                    CategoricalColConfig(col_name="event_type", prefix="EVT"),
+                    CategoricalColConfig(col_name="status", prefix="STATUS"),
+                ],
+                continuous_cols=[
+                    ContinuousColConfig(col_name="cost", prefix="COST", n_bins=3)
+                ],
+            )
+        ]
+    )
 
 
-def test_encode_with_columns():
-    """Test encoding with specific columns."""
-    tokenizer = Tokenizer()
+def _build_fitted_tokenizer(tmp_path: Path, cfg: TokenizerConfig | None = None) -> Tokenizer:
+    collection = _build_source_collection(tmp_path)
+    cohort = Cohort(name="tok-cohort", sources=collection, cache_dir=tmp_path / "cohort")
+    split_cfg = CohortConfig(train_frac=0.5, val_frac=0.25, test_frac=0.25, seed=11)
+
+    tok_cfg = cfg or TokenizerConfig()
+    vocab = Vocabulary(tok_cfg.vocabulary)
+    vocab.fit_from_cohort_train(cohort, split_cfg, force_recompute=True)
+    return Tokenizer(vocabulary=vocab, config=tok_cfg)
+
+
+def test_tokenizer_has_mapping_properties(tmp_path: Path):
+    tokenizer = _build_fitted_tokenizer(tmp_path)
+
+    assert tokenizer.vocab_size > 0
+    assert tokenizer.token2index
+    assert tokenizer.index2token
+    assert tokenizer.config.cls_token in tokenizer.token2index
+
+
+def test_encode_includes_cls_and_sep(tmp_path: Path):
+    tokenizer = _build_fitted_tokenizer(tmp_path)
     events = pl.DataFrame(
         {
+            "entity_id": ["E1", "E1"],
+            "event_date": ["2024-01-01", "2024-02-01"],
+            "wave": [1, 2],
             "event_type": ["A", "B"],
-            "value": [10, 20],
-            "ignore": ["X", "Y"],
+            "status": ["x", "y"],
+            "cost": [10.0, 20.0],
         }
     )
 
-    tokenizer.fit([events], columns=["event_type", "value"])
-    token_ids = tokenizer.encode(events, columns=["event_type", "value"])
+    token_ids = tokenizer.encode(events, source_name="events")
 
-    # Should not include 'ignore' column
-    decoded = tokenizer.decode(token_ids)
-    assert not any("ignore" in token for token in decoded)
+    assert token_ids[0] == tokenizer.token2index[tokenizer.config.cls_token]
+    assert token_ids[-1] == tokenizer.token2index[tokenizer.config.sep_token]
 
 
-def test_decode():
-    """Test decoding token IDs back to tokens."""
-    tokenizer = Tokenizer()
-    events = pl.DataFrame({"event_type": ["A"]})
-
-    tokenizer.fit([events])
-    token_ids = tokenizer.encode(events)
-    tokens = tokenizer.decode(token_ids)
-
-    assert isinstance(tokens, list)
-    assert all(isinstance(token, str) for token in tokens)
-
-
-def test_pad_sequence_truncate():
-    """Test padding/truncation of sequences."""
-    tokenizer = Tokenizer()
-    token_ids = [1, 2, 3, 4, 5]
-
-    # Truncate
-    padded = tokenizer.pad_sequence(token_ids, max_length=3)
-    assert len(padded) == 3
-    assert padded[-1] == tokenizer.vocab[tokenizer.config.sep_token]
-
-
-def test_pad_sequence_pad():
-    """Test padding of short sequences."""
-    tokenizer = Tokenizer()
-    token_ids = [1, 2, 3]
-
-    # Pad
-    padded = tokenizer.pad_sequence(token_ids, max_length=5)
-    assert len(padded) == 5
-    assert padded[-2:] == [tokenizer.vocab[tokenizer.config.pad_token]] * 2
-
-
-def test_vocab_size_property():
-    """Test vocab_size property."""
-    tokenizer = Tokenizer()
-    assert tokenizer.vocab_size == len(tokenizer.vocab)
-
-
-def test_fit_excludes_entity_id_by_default():
-    """Tokenizer should not add entity_id tokens when columns are not provided."""
-    tokenizer = Tokenizer()
-    events = [
-        pl.DataFrame(
-            {
-                "entity_id": ["e1", "e1", "e2"],
-                "event_type": ["A", "B", "A"],
-            }
-        )
-    ]
-
-    tokenizer.fit(events)
-
-    assert "entity_id_e1" not in tokenizer.vocab
-    assert "entity_id_e2" not in tokenizer.vocab
-    assert "event_type_A" in tokenizer.vocab
-
-
-def test_encode_excludes_entity_id_by_default():
-    """Tokenizer should not emit entity_id tokens when columns are not provided."""
-    tokenizer = Tokenizer()
+def test_encode_excludes_id_and_temporal_columns_by_default(tmp_path: Path):
+    tokenizer = _build_fitted_tokenizer(tmp_path)
     events = pl.DataFrame(
         {
-            "entity_id": ["e1", "e1"],
+            "entity_id": ["E1", "E1"],
+            "event_date": ["2024-01-01", "2024-02-01"],
+            "wave": [1, 2],
             "event_type": ["A", "B"],
+            "status": ["x", "y"],
+            "cost": [10.0, 20.0],
         }
     )
 
-    tokenizer.fit([events])
-    token_ids = tokenizer.encode(events)
-    decoded = tokenizer.decode(token_ids)
+    decoded = tokenizer.decode(tokenizer.encode(events, source_name="events"))
 
-    assert not any(token.startswith("entity_id_") for token in decoded)
+    assert not any(tok.startswith("events__entity_id__") for tok in decoded)
+    assert not any(tok.startswith("events__event_date__") for tok in decoded)
+    assert not any(tok.startswith("events__wave__") for tok in decoded)
+    assert any(tok.startswith("events__event_type__") for tok in decoded)
 
 
-def test_explicit_columns_can_include_entity_id():
-    """Explicit columns should still allow entity_id tokenization when requested."""
-    tokenizer = Tokenizer()
-    events = [
-        pl.DataFrame(
-            {
-                "entity_id": ["e1", "e2"],
-                "event_type": ["A", "B"],
-            }
-        )
+def test_encode_respects_exclude_columns(tmp_path: Path):
+    tokenizer = _build_fitted_tokenizer(
+        tmp_path,
+        cfg=TokenizerConfig(exclude_columns=["status"]),
+    )
+    events = pl.DataFrame(
+        {
+            "entity_id": ["E1", "E1"],
+            "event_date": ["2024-01-01", "2024-02-01"],
+            "wave": [1, 2],
+            "event_type": ["A", "B"],
+            "status": ["x", "y"],
+            "cost": [10.0, 20.0],
+        }
+    )
+
+    decoded = tokenizer.decode(tokenizer.encode(events, source_name="events"))
+
+    assert not any(tok.startswith("events__status__") for tok in decoded)
+    assert any(tok.startswith("events__event_type__") for tok in decoded)
+
+
+def test_encode_with_explicit_columns_still_requires_vocab_tokens(tmp_path: Path):
+    tokenizer = _build_fitted_tokenizer(tmp_path)
+    events = pl.DataFrame(
+        {
+            "entity_id": ["E1"],
+            "wave": [1],
+            "event_type": ["A"],
+        }
+    )
+
+    decoded = tokenizer.decode(
+        tokenizer.encode(events, source_name="events", columns=["wave", "event_type"])
+    )
+
+    assert not any(tok.startswith("events__wave__") for tok in decoded)
+    assert any(tok.startswith("events__event_type__") for tok in decoded)
+
+
+def test_encode_with_explicit_unknown_column_is_filtered_out(tmp_path: Path):
+    tokenizer = _build_fitted_tokenizer(tmp_path)
+    events = pl.DataFrame(
+        {
+            "entity_id": ["E1"],
+            "wave": [1],
+        }
+    )
+
+    token_ids = tokenizer.encode(events, source_name="events", columns=["wave"])
+
+    assert token_ids == [
+        tokenizer.token2index[tokenizer.config.cls_token],
+        tokenizer.token2index[tokenizer.config.sep_token],
     ]
 
-    tokenizer.fit(events, columns=["entity_id", "event_type"])
 
-    assert "entity_id_e1" in tokenizer.vocab
+def test_encode_frame_with_explicit_unknown_column_is_filtered_out(tmp_path: Path):
+    tokenizer = _build_fitted_tokenizer(tmp_path)
+    events = pl.DataFrame(
+        {
+            "entity_id": ["E1"],
+            "wave": [1],
+        }
+    )
+
+    encoded = tokenizer.encode_frame(events, source_name="events", columns=["wave"])
+
+    assert encoded["token_ids"].to_list() == [None]
+
+
+def test_encode_unknown_categorical_maps_to_unk(tmp_path: Path):
+    tokenizer = _build_fitted_tokenizer(tmp_path)
+    events = pl.DataFrame(
+        {
+            "entity_id": ["E9"],
+            "event_date": ["2024-03-01"],
+            "wave": [3],
+            "event_type": ["NEW_VALUE"],
+            "status": ["x"],
+            "cost": [10.0],
+        }
+    )
+
+    token_ids = tokenizer.encode(events, source_name="events")
+    unk_id = tokenizer.token2index[tokenizer.config.unk_token]
+    assert unk_id in token_ids
+
+
+def test_encode_skips_null_values(tmp_path: Path):
+    tokenizer = _build_fitted_tokenizer(tmp_path)
+    events = pl.DataFrame(
+        {
+            "entity_id": ["E1"],
+            "event_date": ["2024-01-01"],
+            "wave": [1],
+            "event_type": [None],
+            "status": ["x"],
+            "cost": [None],
+        }
+    )
+
+    decoded = tokenizer.decode(tokenizer.encode(events, source_name="events"))
+
+    assert not any(tok.startswith("events__event_type__") for tok in decoded)
+
+
+def test_decode_falls_back_to_unk_for_unknown_ids(tmp_path: Path):
+    tokenizer = _build_fitted_tokenizer(tmp_path)
+    decoded = tokenizer.decode([999999])
+    assert decoded == [tokenizer.config.unk_token]
+
+
+def test_pad_sequence_truncate_and_pad(tmp_path: Path):
+    tokenizer = _build_fitted_tokenizer(tmp_path)
+
+    seq = [
+        tokenizer.token2index[tokenizer.config.cls_token],
+        10,
+        11,
+        tokenizer.token2index[tokenizer.config.sep_token],
+    ]
+    truncated = tokenizer.pad_sequence(seq, max_length=3)
+    assert len(truncated) == 3
+    assert truncated[-1] == tokenizer.token2index[tokenizer.config.sep_token]
+
+    padded = tokenizer.pad_sequence(seq, max_length=8)
+    assert len(padded) == 8
+    assert padded[-1] == tokenizer.token2index[tokenizer.config.pad_token]
+
+
+def test_encode_unknown_source_returns_only_framing_tokens(tmp_path: Path):
+    tokenizer = _build_fitted_tokenizer(tmp_path)
+    events = pl.DataFrame({"event_type": ["A"], "status": ["x"]})
+
+    token_ids = tokenizer.encode(events, source_name="missing_source")
+
+    assert token_ids == [
+        tokenizer.token2index[tokenizer.config.cls_token],
+        tokenizer.token2index[tokenizer.config.sep_token],
+    ]

@@ -27,7 +27,7 @@ class Source:
         config: Configuration describing this source.
 
     Note:
-        Rows with null entity IDs or primary timestamps/sequence columns  are automatically
+        Rows with null entity IDs or primary temporal columns are automatically
         dropped during scanning and reading. Entity IDs are cast to string
         regardless of the original dtype.
 

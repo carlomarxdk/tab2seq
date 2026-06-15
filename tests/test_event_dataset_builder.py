@@ -1,23 +1,21 @@
-"""Tests for event dataset builder."""
+"""Tests for event dataset construction from cohort splits and vocabulary."""
 
 from pathlib import Path
 
 import polars as pl
 
 from tab2seq.cohort import Cohort, CohortConfig
-from tab2seq.config import TokenizerConfig
 from tab2seq.datasets import EventDataset, EventDatasetConfig, RelativeDateRule
 from tab2seq.source import (
     CategoricalColConfig,
-    ContinuousColConfig,
     SourceCollection,
     SourceConfig,
     TemporalColConfig,
 )
-from tab2seq.tokenization import Vocabulary
+from tab2seq.tokenization import Tokenizer, Vocabulary, VocabularyConfig
 
 
-def _build_collection(tmp_path: Path) -> SourceCollection:
+def _build_source_collection(tmp_path: Path) -> SourceCollection:
     health_df = pl.DataFrame(
         {
             "entity_id": ["E1", "E1", "E2", "E3"],
@@ -46,7 +44,6 @@ def _build_collection(tmp_path: Path) -> SourceCollection:
             filepath=health_path,
             id_col="entity_id",
             categorical_cols=[CategoricalColConfig(col_name="diagnosis", prefix="DIAG")],
-            continuous_cols=[ContinuousColConfig(col_name="cost", prefix="COST", n_bins=4)],
             temporal_cols=[
                 TemporalColConfig(col_name="date", is_primary=True, drop_na=True),
             ],
@@ -71,24 +68,23 @@ def _build_collection(tmp_path: Path) -> SourceCollection:
     return SourceCollection.from_configs(configs)
 
 
-def _fitted_vocab_and_cohort(tmp_path: Path) -> tuple[Cohort, CohortConfig, Vocabulary]:
-    collection = _build_collection(tmp_path)
+def _build_dataset_inputs(tmp_path: Path) -> tuple[Cohort, Tokenizer]:
+    collection = _build_source_collection(tmp_path)
     cohort = Cohort(name="dataset-cohort", sources=collection, cache_dir=tmp_path / "cohorts")
     split_cfg = CohortConfig(train_frac=0.5, val_frac=0.25, test_frac=0.25, seed=42)
 
-    tok_cfg = TokenizerConfig()
-    vocab = Vocabulary(tok_cfg.vocabulary)
+    vocab = Vocabulary(VocabularyConfig())
     vocab.fit_from_cohort_train(cohort, split_cfg, force_recompute=True)
-    return cohort, split_cfg, vocab
+    tokenizer = Tokenizer(vocabulary=vocab)
+    return cohort, tokenizer
 
 
 def test_build_split_has_required_columns(tmp_path: Path):
-    cohort, split_cfg, vocab = _fitted_vocab_and_cohort(tmp_path)
+    cohort, tokenizer = _build_dataset_inputs(tmp_path)
 
     builder = EventDataset(
         cohort=cohort,
-        vocabulary=vocab,
-        split_config=split_cfg,
+        tokenizer=tokenizer,
         dataset_config=EventDatasetConfig(),
     )
 
@@ -103,12 +99,11 @@ def test_build_split_has_required_columns(tmp_path: Path):
 
 
 def test_write_parquet_separate_static_default(tmp_path: Path):
-    cohort, split_cfg, vocab = _fitted_vocab_and_cohort(tmp_path)
+    cohort, tokenizer = _build_dataset_inputs(tmp_path)
 
     builder = EventDataset(
         cohort=cohort,
-        vocabulary=vocab,
-        split_config=split_cfg,
+        tokenizer=tokenizer,
         dataset_config=EventDatasetConfig(embed_static_in_events=False),
     )
 
@@ -126,12 +121,11 @@ def test_write_parquet_separate_static_default(tmp_path: Path):
 
 
 def test_embed_static_in_events_true(tmp_path: Path):
-    cohort, split_cfg, vocab = _fitted_vocab_and_cohort(tmp_path)
+    cohort, tokenizer = _build_dataset_inputs(tmp_path)
 
     builder = EventDataset(
         cohort=cohort,
-        vocabulary=vocab,
-        split_config=split_cfg,
+        tokenizer=tokenizer,
         dataset_config=EventDatasetConfig(embed_static_in_events=True),
     )
 
@@ -140,7 +134,7 @@ def test_embed_static_in_events_true(tmp_path: Path):
 
 
 def test_relative_date_rule_age_years(tmp_path: Path):
-    cohort, split_cfg, vocab = _fitted_vocab_and_cohort(tmp_path)
+    cohort, tokenizer = _build_dataset_inputs(tmp_path)
 
     dataset_cfg = EventDatasetConfig(
         relative_date_features=[
@@ -154,8 +148,7 @@ def test_relative_date_rule_age_years(tmp_path: Path):
     )
     builder = EventDataset(
         cohort=cohort,
-        vocabulary=vocab,
-        split_config=split_cfg,
+        tokenizer=tokenizer,
         dataset_config=dataset_cfg,
     )
 
@@ -165,8 +158,8 @@ def test_relative_date_rule_age_years(tmp_path: Path):
 
 
 def test_get_entity_record_returns_static_and_events(tmp_path: Path):
-    cohort, split_cfg, vocab = _fitted_vocab_and_cohort(tmp_path)
-    dataset = EventDataset(cohort=cohort, vocabulary=vocab, split_config=split_cfg)
+    cohort, tokenizer = _build_dataset_inputs(tmp_path)
+    dataset = EventDataset(cohort=cohort, tokenizer=tokenizer)
 
     train_df = dataset.build_split("train", force_recompute_splits=True)
     entity_id = train_df.get_column("entity_id").to_list()[0]
@@ -176,13 +169,20 @@ def test_get_entity_record_returns_static_and_events(tmp_path: Path):
     assert record["entity_id"] == entity_id
     assert record["split"] == "train"
     assert isinstance(record["static"], dict)
+    assert record["static"]["entity_id"] == entity_id
+    assert record["static"]["split"] == "train"
+    assert "token_ids" in record["static"]
+    assert isinstance(record["static"]["token_ids"], list)
+    assert "token_str" in record["static"]
+    assert isinstance(record["static"]["token_str"], str)
+    assert "birthday" not in record["static"]["token_str"]
     assert isinstance(record["events"], list)
     assert len(record["events"]) > 0
 
 
 def test_sample_entity_record_seed_is_deterministic(tmp_path: Path):
-    cohort, split_cfg, vocab = _fitted_vocab_and_cohort(tmp_path)
-    dataset = EventDataset(cohort=cohort, vocabulary=vocab, split_config=split_cfg)
+    cohort, tokenizer = _build_dataset_inputs(tmp_path)
+    dataset = EventDataset(cohort=cohort, tokenizer=tokenizer)
     _ = dataset.build_split("train", force_recompute_splits=True)
 
     sample_a = dataset.sample_entity_record(split="train", seed=7)
@@ -194,8 +194,8 @@ def test_sample_entity_record_seed_is_deterministic(tmp_path: Path):
 
 
 def test_iter_entity_records_covers_split_entities(tmp_path: Path):
-    cohort, split_cfg, vocab = _fitted_vocab_and_cohort(tmp_path)
-    dataset = EventDataset(cohort=cohort, vocabulary=vocab, split_config=split_cfg)
+    cohort, tokenizer = _build_dataset_inputs(tmp_path)
+    dataset = EventDataset(cohort=cohort, tokenizer=tokenizer)
     train_df = dataset.build_split("train", force_recompute_splits=True)
 
     expected = sorted(set(train_df.get_column("entity_id").to_list()))
@@ -204,8 +204,8 @@ def test_iter_entity_records_covers_split_entities(tmp_path: Path):
 
 
 def test_next_entity_record_sequence_and_reset(tmp_path: Path):
-    cohort, split_cfg, vocab = _fitted_vocab_and_cohort(tmp_path)
-    dataset = EventDataset(cohort=cohort, vocabulary=vocab, split_config=split_cfg)
+    cohort, tokenizer = _build_dataset_inputs(tmp_path)
+    dataset = EventDataset(cohort=cohort, tokenizer=tokenizer)
     train_df = dataset.build_split("train", force_recompute_splits=True)
     n_entities = len(set(train_df.get_column("entity_id").to_list()))
 
@@ -224,3 +224,20 @@ def test_next_entity_record_sequence_and_reset(tmp_path: Path):
     reset_first = dataset.next_entity_record(split="train", shuffle=False, reset=True)
     assert reset_first is not None
     assert reset_first["entity_id"] == first["entity_id"]
+
+
+def test_primary_time_can_be_zero(tmp_path: Path):
+    cohort, tokenizer = _build_dataset_inputs(tmp_path)
+    dataset = EventDataset(
+        cohort=cohort,
+        tokenizer=tokenizer,
+        dataset_config=EventDatasetConfig(reference_date="2020-01-01"),
+    )
+
+    train_df = dataset.build_split("train", force_recompute_splits=True)
+    assert (
+        train_df
+        .filter(pl.col("primary_timestamp") == "2020-01-01")
+        .select(pl.col("primary_time").eq(0).all())
+        .item()
+    )
