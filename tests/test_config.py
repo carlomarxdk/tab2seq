@@ -19,14 +19,15 @@ def test_tokenizer_config_defaults():
     config = TokenizerConfig()
     assert config.id_columns == ["entity_id"]
     assert config.exclude_columns == []
-    assert config.pad_token == "[PAD]"
-    assert config.unk_token == "[UNK]"
-    assert config.cls_token == "[CLS]"
-    assert config.sep_token == "[SEP]"
-    assert config.mask_token == "[MASK]"
     assert isinstance(config.vocabulary, VocabularyConfig)
+    assert config.vocabulary.pad_token == "[PAD]"
+    assert config.vocabulary.unk_token == "[UNK]"
+    assert config.vocabulary.cls_token == "[CLS]"
+    assert config.vocabulary.sep_token == "[SEP]"
+    assert config.vocabulary.mask_token == "[MASK]"
     assert config.vocabulary.max_vocab_size == 50000
     assert config.vocabulary.min_token_count == 1
+    assert config.vocabulary.count_mode == "overall"
 
 
 def test_loader_config_defaults():

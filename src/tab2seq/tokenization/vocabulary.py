@@ -70,6 +70,8 @@ class Vocabulary:
         self.vocab_df: pl.DataFrame | None = None
         self.bin_edges_df: pl.DataFrame | None = None
         self.metadata: dict[str, Any] | None = None
+        self.token2index: dict[str, int] = {}
+        self.index2token: dict[int, str] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -113,20 +115,29 @@ class Vocabulary:
             self.metadata = json.loads(
                 artifacts.metadata_path.read_text(encoding="utf-8")
             )
+            self._build_lookup_dicts()
             return self.vocab_df
 
-        token_counts: dict[tuple[str, str, str, str], int] = {}
+        token_counts: dict[tuple[str, str, str, str, str], int] = {}
         bin_edges_rows: list[dict[str, Any]] = []
 
-        for source in self._cohort_sources(cohort):
+        for source in cohort.collection:
             lf = source.scan().filter(
                 pl.col(source.config.id_col).cast(pl.Utf8).is_in(train_ids)
             )
             token_counts = self._collect_categorical_tokens(
-                lf, source.name, source.config.categorical_cols, token_counts
+                lf,
+                source.name,
+                source.config.id_col,
+                source.config.categorical_cols,
+                token_counts,
             )
             token_counts, new_edges = self._collect_continuous_tokens(
-                lf, source.name, source.config.continuous_cols, token_counts
+                lf,
+                source.name,
+                source.config.id_col,
+                source.config.continuous_cols,
+                token_counts,
             )
             bin_edges_rows.extend(new_edges)
 
@@ -153,6 +164,7 @@ class Vocabulary:
             "config": {
                 "max_vocab_size": self.config.max_vocab_size,
                 "min_token_count": self.config.min_token_count,
+                "count_mode": self.config.count_mode,
                 "special_tokens": self.config.special_tokens,
             },
             "n_tokens": vocab_df.height,
@@ -171,31 +183,19 @@ class Vocabulary:
         self.vocab_df = vocab_df
         self.bin_edges_df = bin_edges_df
         self.metadata = metadata
+        self._build_lookup_dicts()
         return vocab_df
 
-    @property
-    def token2index(self) -> dict[str, int]:
-        """Mapping from token string to integer ID."""
+    def _build_lookup_dicts(self) -> None:
+        """Populate token2index and index2token from the current vocab_df."""
         if self.vocab_df is None:
-            return {}
-        return dict(
-            zip(
-                self.vocab_df["token"].to_list(),
-                self.vocab_df["token_id"].to_list(),
-            )
-        )
-
-    @property
-    def index2token(self) -> dict[int, str]:
-        """Mapping from integer ID to token string."""
-        if self.vocab_df is None:
-            return {}
-        return dict(
-            zip(
-                self.vocab_df["token_id"].to_list(),
-                self.vocab_df["token"].to_list(),
-            )
-        )
+            self.token2index = {}
+            self.index2token = {}
+            return
+        tokens = self.vocab_df["token"].to_list()
+        ids = self.vocab_df["token_id"].to_list()
+        self.token2index = dict(zip(tokens, ids))
+        self.index2token = dict(zip(ids, tokens))
 
     def column_categories(self, source_name: str) -> dict[str, str]:
         """Return ``{column_name: category}`` for all feature columns in a source.
@@ -222,6 +222,29 @@ class Vocabulary:
             .unique()
         )
         return dict(zip(sub["column_name"].to_list(), sub["category"].to_list()))
+
+    def column_prefixes(self, source_name: str) -> dict[str, str]:
+        """Return ``{column_name: prefix}`` for all feature columns in a source.
+
+        Args:
+            source_name: Source name as registered in the cohort.
+
+        Returns:
+            Dict mapping column name to its configured token prefix string.
+            Empty dict if vocabulary has not been fitted yet.
+        """
+        if self.vocab_df is None or "prefix" not in self.vocab_df.columns:
+            return {}
+        sub = (
+            self.vocab_df
+            .filter(
+                (pl.col("source_name") == source_name)
+                & (pl.col("source_name") != "__special__")
+            )
+            .select(["column_name", "prefix"])
+            .unique()
+        )
+        return dict(zip(sub["column_name"].to_list(), sub["prefix"].to_list()))
 
     def bin_edges_for(self, source_name: str, col_name: str) -> np.ndarray | None:
         """Return bin edges for a continuous column as a sorted 1-D array.
@@ -263,7 +286,7 @@ class Vocabulary:
 
     def _compose_vocab_rows(
         self,
-        token_counts: dict[tuple[str, str, str, str], int],
+        token_counts: dict[tuple[str, str, str, str, str], int],
     ) -> list[dict[str, Any]]:
         """Assemble vocab rows from token counts, prepending special tokens."""
         rows: list[dict[str, Any]] = []
@@ -278,6 +301,7 @@ class Vocabulary:
                     "category": "special",
                     "source_name": "__special__",
                     "column_name": "__special__",
+                    "prefix": "__special__",
                     "transform": "identity",
                     "count": -1,
                 }
@@ -290,9 +314,9 @@ class Vocabulary:
             if count >= self.config.min_token_count
         ]
         # Sort by (source, column, token) for deterministic ordering.
-        sortable.sort(key=lambda x: (x[0][0], x[0][1], x[0][3]))
+        sortable.sort(key=lambda x: (x[0][0], x[0][1], x[0][4]))
 
-        for (source_name, column_name, category, token), count in sortable:
+        for (source_name, column_name, prefix, category, token), count in sortable:
             if token_id >= self.config.max_vocab_size:
                 break
             rows.append(
@@ -303,6 +327,7 @@ class Vocabulary:
                     "category": category,
                     "source_name": source_name,
                     "column_name": column_name,
+                    "prefix": prefix,
                     "transform": category,
                     "count": int(count),
                 }
@@ -315,25 +340,42 @@ class Vocabulary:
         self,
         lf: pl.LazyFrame,
         source_name: str,
+        id_col: str,
         categorical_cols: list[Any] | None,
-        token_counts: dict[tuple[str, str, str, str], int],
-    ) -> dict[tuple[str, str, str, str], int]:
+        token_counts: dict[tuple[str, str, str, str, str], int],
+    ) -> dict[tuple[str, str, str, str, str], int]:
         """Count occurrences of each categorical token in the train split."""
         if not categorical_cols:
             return token_counts
 
         for col_cfg in categorical_cols:
             col = col_cfg.col_name
-            counts = (
-                lf.select(pl.col(col).cast(pl.Utf8).alias(col))
-                .drop_nulls()
-                .group_by(col)
-                .len()
-                .collect()
-            )
+            prefix = col_cfg.prefix
+            if self.config.count_mode == "entity_unique":
+                counts = (
+                    lf.select(
+                        [
+                            pl.col(id_col).cast(pl.Utf8).alias(id_col),
+                            pl.col(col).cast(pl.Utf8).alias(col),
+                        ]
+                    )
+                    .drop_nulls()
+                    .unique(subset=[id_col, col])
+                    .group_by(col)
+                    .len()
+                    .collect()
+                )
+            else:
+                counts = (
+                    lf.select(pl.col(col).cast(pl.Utf8).alias(col))
+                    .drop_nulls()
+                    .group_by(col)
+                    .len()
+                    .collect()
+                )
             for row in counts.iter_rows(named=True):
-                token = f"{source_name}__{col}__{row[col]}"
-                token_counts[(source_name, col, "categorical", token)] = int(row["len"])
+                token = f"{source_name}__{prefix}__{row[col]}"
+                token_counts[(source_name, col, prefix, "categorical", token)] = int(row["len"])
 
         return token_counts
 
@@ -341,9 +383,10 @@ class Vocabulary:
         self,
         lf: pl.LazyFrame,
         source_name: str,
+        id_col: str,
         continuous_cols: list[Any] | None,
-        token_counts: dict[tuple[str, str, str, str], int],
-    ) -> tuple[dict[tuple[str, str, str, str], int], list[dict[str, Any]]]:
+        token_counts: dict[tuple[str, str, str, str, str], int],
+    ) -> tuple[dict[tuple[str, str, str, str, str], int], list[dict[str, Any]]]:
         """Quantile-bin continuous columns, count bin occupancy, store edges.
 
         Bin edges are computed from train-split quantiles only (leakage-safe).
@@ -357,14 +400,20 @@ class Vocabulary:
 
         for col_cfg in continuous_cols:
             col = col_cfg.col_name
+            prefix = col_cfg.prefix
             n_bins = col_cfg.n_bins
 
-            values = (
-                lf.select(pl.col(col).cast(pl.Float64).alias(col))
+            selected = (
+                lf.select(
+                    [
+                        pl.col(id_col).cast(pl.Utf8).alias(id_col),
+                        pl.col(col).cast(pl.Float64).alias(col),
+                    ]
+                )
                 .drop_nulls()
-                .collect()[col]
-                .to_numpy()
+                .collect()
             )
+            values = selected[col].to_numpy()
             if values.size == 0:
                 continue
 
@@ -377,9 +426,30 @@ class Vocabulary:
                 0,
                 edges.size - 2,
             )
-            for idx, count in zip(*np.unique(bin_idx, return_counts=True)):
-                token = f"{source_name}__{col}__BIN_{int(idx)}"
-                token_counts[(source_name, col, "continuous_bin", token)] = int(count)
+            if self.config.count_mode == "entity_unique":
+                per_event = pl.DataFrame(
+                    {
+                        id_col: selected[id_col],
+                        "bin_idx": pl.Series(bin_idx.tolist(), dtype=pl.Int64),
+                    }
+                )
+                counts_df = (
+                    per_event
+                    .unique(subset=[id_col, "bin_idx"])
+                    .group_by("bin_idx")
+                    .len()
+                    .sort("bin_idx")
+                )
+                count_pairs = zip(
+                    counts_df["bin_idx"].to_list(),
+                    counts_df["len"].to_list(),
+                )
+            else:
+                count_pairs = zip(*np.unique(bin_idx, return_counts=True))
+
+            for idx, count in count_pairs:
+                token = f"{source_name}__{prefix}__BIN_{int(idx)}"
+                token_counts[(source_name, col, prefix, "continuous_bin", token)] = int(count)
 
             for i in range(edges.size - 1):
                 edge_rows.append(
@@ -409,7 +479,7 @@ class Vocabulary:
         )
 
     def _vocab_hash(self, cohort: Cohort, split_cfg: CohortConfig) -> str:
-        sources = self._cohort_sources(cohort)
+        sources = cohort.collection
         payload = {
             "vocabulary_config_hash": self._config_hash(),
             "split_hash": split_cfg.config_hash(),
@@ -428,6 +498,7 @@ class Vocabulary:
         payload = {
             "max_vocab_size": self.config.max_vocab_size,
             "min_token_count": self.config.min_token_count,
+            "count_mode": self.config.count_mode,
             "special_tokens": self.config.special_tokens,
         }
         return hashlib.sha256(
@@ -450,14 +521,6 @@ class Vocabulary:
     # ------------------------------------------------------------------
     # Private helpers — static utilities
     # ------------------------------------------------------------------
-
-    @staticmethod
-    def _cohort_sources(cohort: Cohort) -> Any:
-        if hasattr(cohort, "collection"):
-            return cohort.collection
-        if hasattr(cohort, "_collection"):
-            return cohort._collection
-        raise AttributeError("Cohort object does not expose a source collection.")
 
     @staticmethod
     def _make_pretty_token(token: str, source_name: str) -> str:

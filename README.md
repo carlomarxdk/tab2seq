@@ -4,13 +4,11 @@
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/tab2seq)](https://pypi.org/project/tab2seq/)
 [![PyPI - Status](https://img.shields.io/pypi/status/tab2seq)](https://pypi.org/project/tab2seq/)
 [![GitHub License](https://img.shields.io/github/license/carlomarxdk/tab2seq)](https://github.com/carlomarxdk/tab2seq/blob/main/LICENSE)
-[![DOI](https://zenodo.org/badge/1163020308.svg)](https://doi.org/10.5281/zenodo.18752504)
-
 
 **tab2seq** turns multi-source tabular event data (registries, EHR, financial records) into tokenized sequences ready for Transformer-based models: it generalizes the data processing pipeline from the [Life2Vec](https://github.com/SocialComplexityLab/life2vec) paper to arbitrary domains.
 
 > [!WARNING]
-> This is an **beta** package. The core pipeline (Sources → Cohort → Vocabulary → EventDataset) is functional but the API is not yet stable. Documentation is incomplete.  Pin to a specific version if you depend on current behaviour. See [Roadmap](#roadmap) to see what is implemented at this point.
+> This is an **alpha** package. The core pipeline (Sources → Cohort → Vocabulary → EventDataset) is functional but the API is not yet stable. Documentation is incomplete.  Pin to a specific version if you depend on current behaviour. See [TODOs](#roadmap) to see what is implemented at this point.
 
 ## Why tab2seq?
 
@@ -58,9 +56,21 @@ data_paths = generate_synthetic_data(
     output_dir="synthetic_data",
     n_entities=10_000,
     seed=742,
-    registries=["health", "labour"],
+    registries=["health", "labour", "survey", "income"],
 )
 pl.read_parquet(data_paths["health"]).head()
+```
+
+```text
+shape: (5, 7)
+┌───────────┬────────────┬───────────┬───────────┬──────────────────┬─────────┬────────────────┐
+│ entity_id ┆ date       ┆ diagnosis ┆ procedure ┆ department       ┆ cost    ┆ length_of_stay │
+│ str       ┆ date       ┆ str       ┆ str       ┆ str              ┆ f64     ┆ i64            │
+╞═══════════╪════════════╪═══════════╪═══════════╪══════════════════╪═════════╪════════════════╡
+│ E00001    ┆ 2016-09-15 ┆ J18.1     ┆ CABG      ┆ gastroenterology ┆ 7306.17 ┆ 2              │
+│ E00001    ┆ 2017-05-25 ┆ E78.0     ┆ XRAY      ┆ neurology        ┆  138.65 ┆ 1              │
+│ E00001    ┆ 2018-01-18 ┆ E78.0     ┆ MRI       ┆ general_surgery  ┆ 6704.59 ┆ 10             │
+└───────────┴────────────┴───────────┴───────────┴──────────────────┴─────────┴────────────────┘
 ```
 
 ### 2. Define Sources
@@ -84,11 +94,11 @@ configs = [
             CategoricalColConfig(col_name="department", prefix="DEPT"),
         ],
         continuous_cols=[
-            ContinuousColConfig(col_name="cost", prefix="COST", n_bins=20),
-            ContinuousColConfig(col_name="length_of_stay", prefix="LOS", n_bins=10),
+            ContinuousColConfig(col_name="cost", prefix="COST", n_bins=20, strategy="quantile"),
+            ContinuousColConfig(col_name="length_of_stay", prefix="LOS", n_bins=10, strategy="quantile"),
         ],
         temporal_cols=[
-            TemporalColConfig(col_name="date", is_primary=True, drop_na=True),
+            TemporalColConfig(col_name="date", is_primary=True, drop_na=True, col_type="datetime"),
         ],
     ),
     SourceConfig(
@@ -102,11 +112,11 @@ configs = [
             CategoricalColConfig(col_name="native_language", prefix="LANG", static=True),
         ],
         continuous_cols=[
-            ContinuousColConfig(col_name="weekly_hours", prefix="WEEKLY_HOURS", n_bins=10),
+            ContinuousColConfig(col_name="weekly_hours", prefix="WEEKLY_HOURS", n_bins=10, strategy="uniform"),
         ],
         temporal_cols=[
-            TemporalColConfig(col_name="date", is_primary=True, drop_na=True),
-            TemporalColConfig(col_name="birthday", static=True, drop_na=True),
+            TemporalColConfig(col_name="date", is_primary=True, drop_na=True, col_type="datetime"),
+            TemporalColConfig(col_name="birthday", static=True, drop_na=True, col_type="datetime"),
         ],
     ),
 ]
@@ -157,11 +167,20 @@ from tab2seq.tokenization import Tokenizer, Vocabulary
 tok_cfg = TokenizerConfig()
 tok_cfg.vocabulary.min_token_count = 1
 tok_cfg.vocabulary.max_vocab_size = 50_000
+tok_cfg.vocabulary.count_mode = "entity_unique"  # or "overall"
 
 vocab = Vocabulary(tok_cfg.vocabulary)
 vocab.fit_from_cohort_train(cohort=cohort, split_config=split_cfg)
 print(f"Vocabulary size: {vocab.vocab_df.height}")
 ```
+
+`VocabularyConfig.count_mode` controls how token frequency is computed for
+`min_token_count` filtering:
+
+- `overall`: counts every token occurrence across all train events.
+- `entity_unique`: counts each token at most once per entity.
+
+Use `entity_unique` to reduce dominance from very prolific entities.
 
 ### 5. Build and Persist Tokenized Event Datasets
 
@@ -221,6 +240,42 @@ record = dataset.sample_entity_record(split="train", seed=7)
 record = dataset.next_entity_record(split="train", shuffle=True, seed=0, reset=True)
 while record is not None:
     record = dataset.next_entity_record(split="train", shuffle=True, seed=0)
+```
+
+The `format` parameter on `get_entity_record`, `sample_entity_record`,
+`iter_entity_records`, and `next_entity_record` lets you choose output type:
+
+- `raw`: Python dict payload (default)
+- `frame`: Polars DataFrame payload
+- `tensor`: NumPy tensor-style payload
+- `padded_tensor`: NumPy payload with padded token matrix + attention mask
+
+```python
+# 1) get_entity_record -> DataFrame payload
+record_frame = dataset.get_entity_record(
+    entity_id="E123",
+    split="train",
+    format="frame",
+)
+
+# 2) sample_entity_record -> tensor payload
+record_tensor = dataset.sample_entity_record(
+    split="train",
+    seed=42,
+    format="tensor",
+)
+
+# 3) iter_entity_records -> raw dict payload
+for record_raw in dataset.iter_entity_records(split="train", format="raw"):
+    pass
+
+# 4) next_entity_record -> padded tensor payload
+record_padded = dataset.next_entity_record(
+    split="train",
+    reset=True,
+    format="padded_tensor",
+    pad_id=0,
+)
 ```
 
 ## Synthetic Registries
