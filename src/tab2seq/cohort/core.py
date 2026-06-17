@@ -11,7 +11,7 @@ import numpy as np
 import polars as pl
 
 from tab2seq.cohort.config import CohortConfig, EntityInclusionCriteria
-from tab2seq.source import Source, SourceCollection
+from tab2seq.source import SchemaError, Source, SourceCollection
 
 
 logger = logging.getLogger("Cohort")
@@ -150,8 +150,7 @@ class Cohort:
 
         Starts from the union of all entity IDs across the collection, then
         applies each ``EntityInclusionCriteria`` in sequence.  Only criteria
-        with ``required=True`` have a filtering effect — non-required entries
-        are silently skipped.
+        with ``required=True`` have a filtering effect.
 
         Returns:
             Set of entity IDs satisfying all inclusion criteria.
@@ -159,7 +158,14 @@ class Cohort:
         Raises:
             KeyError: If a criteria references a source not in the collection.
         """
-        candidates = self._collection.get_all_entity_ids()
+        try:
+            candidates = self._collection.get_all_entity_ids()
+        except SchemaError as exc:
+            raise SchemaError(
+                f"Failed to resolve entity IDs for cohort '{self.name}' because "
+                f"a source schema is invalid: {exc}"
+            ) from exc
+
         logger.info(
             "Candidate pool: %d entities (union across all sources)", len(candidates)
         )
@@ -169,36 +175,42 @@ class Cohort:
             return candidates
 
         for criteria in self._criteria:
-            if not criteria.required:
-                continue
-
             if criteria.source_name not in self._collection:
                 raise KeyError(
                     f"Inclusion criteria references unknown source "
                     f"'{criteria.source_name}'. Available: {self._collection.names}"
                 )
 
+            if not criteria.required:
+                continue
+
             source = self._collection[criteria.source_name]
             id_col = source.config.id_col
             before = len(candidates)
 
-            qualifying = (
-                source.scan()
-                .group_by(id_col)
-                .agg(pl.len().alias("_n_events"))
-                .filter(pl.col("_n_events") >= criteria.min_events)
-                .pipe(
-                    lambda lf: (
-                        lf.filter(pl.col("_n_events") <= criteria.max_events)
-                        if criteria.max_events is not None
-                        else lf
+            try:
+                qualifying = (
+                    source.scan()
+                    .group_by(id_col)
+                    .agg(pl.len().alias("_n_events"))
+                    .filter(pl.col("_n_events") >= criteria.min_events)
+                    .pipe(
+                        lambda lf: (
+                            lf.filter(pl.col("_n_events") <= criteria.max_events)
+                            if criteria.max_events is not None
+                            else lf
+                        )
                     )
+                    .select(id_col)
+                    .collect()
+                    .get_column(id_col)
+                    .to_list()
                 )
-                .select(id_col)
-                .collect()
-                .get_column(id_col)
-                .to_list()
-            )
+            except SchemaError as exc:
+                raise SchemaError(
+                    f"Failed to apply inclusion criteria for cohort '{self.name}' on "
+                    f"source '{source.name}': {exc}"
+                ) from exc
 
             candidates &= set(qualifying)
 
@@ -210,6 +222,17 @@ class Cohort:
                 before,
                 len(candidates),
             )
+
+            if not candidates:
+                logger.warning(
+                    "Cohort '%s' resolved to 0 entities after required inclusion "
+                    "criteria on source '%s' (min_events=%s, max_events=%s).",
+                    self.name,
+                    criteria.source_name,
+                    criteria.min_events,
+                    criteria.max_events,
+                )
+                break
 
         logger.info("Resolved cohort: %d entities", len(candidates))
         return candidates
@@ -392,11 +415,27 @@ class Cohort:
         if not static_cols:
             return None
 
+        try:
+            scan = source.scan()
+        except SchemaError as exc:
+            raise SchemaError(
+                f"Failed to build entities table for cohort '{self.name}' because "
+                f"source '{source.name}' has an invalid schema: {exc}"
+            ) from exc
+
+        available_columns = set(scan.collect_schema().names())
+        missing_static = [col for col in static_cols if col not in available_columns]
+        if missing_static:
+            raise SchemaError(
+                f"Failed to build entities table for cohort '{self.name}' because "
+                f"source '{source.name}' is missing static columns: {missing_static}"
+            )
+
         rename_map = {col: f"{source.name}__{col}" for col in static_cols}
         agg_exprs = [pl.col(col).first().alias(col) for col in static_cols]
 
         return (
-            source.scan()
+            scan
             .select([id_col, *static_cols])
             .filter(pl.col(id_col).is_in(self.entity_id_list))
             .group_by(id_col, maintain_order=True)

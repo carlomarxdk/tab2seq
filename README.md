@@ -9,7 +9,7 @@
 **tab2seq** turns multi-source tabular event data (registries, EHR, financial records) into tokenized sequences ready for Transformer-based models: it generalizes the data processing pipeline from the [Life2Vec](https://github.com/SocialComplexityLab/life2vec) paper to arbitrary domains.
 
 > [!WARNING]
-> This is an **beta** package. The core pipeline (Sources → Cohort → Vocabulary → EventDataset) is functional but the API is not yet stable. Documentation is incomplete.  Pin to a specific version if you depend on current behaviour. See [TODOs](#roadmap) to see what is implemented at this point.
+> This is an **alpha** package. The core pipeline (Sources → Cohort → Vocabulary → EventDataset) is functional but the API is not yet stable. Documentation is incomplete.  Pin to a specific version if you depend on current behaviour. See [TODOs](#roadmap) to see what is implemented at this point.
 
 ## Why tab2seq?
 
@@ -22,9 +22,7 @@ Building a [Life2Vec](https://github.com/SocialComplexityLab/life2vec)-style pip
 - Produce tokenized, model-ready event sequences with time features
 - Generate realistic synthetic data for development and testing
 
-**Requires:** Python ≥ 3.11, Numpy ≥ 2.0,  Polars ≥ 1.38, Pydantic v2.
-
-**Documentation**: See [Documentation](https://carlomarxdk.github.io/tab2seq) for additional information.
+**Requires:** Python ≥ 3.11, Numpy ≥ 2.0,  Polars ≥ 1.38, Pydantic ≥ 2.
 
 ## Pipeline
 
@@ -140,8 +138,8 @@ A `Cohort` resolves one consistent entity universe across all sources, applies i
 from tab2seq.cohort import Cohort, CohortConfig, EntityInclusionCriteria
 
 criteria = [
-    EntityInclusionCriteria(source_name="health", required=False),
     EntityInclusionCriteria(source_name="labour", required=True, min_events=1),
+    EntityInclusionCriteria(source_name="income", required=True, min_events=1),
 ]
 
 cohort = Cohort(
@@ -156,6 +154,11 @@ split_cfg = CohortConfig(train_frac=0.7, val_frac=0.15, test_frac=0.15, seed=42)
 cohort.build_or_load_splits(split_cfg)
 print(f"Cohort size: {len(cohort)} entities")
 ```
+
+Only criteria with `required=True` filter entities. If you set `min_events` or
+`max_events` on a non-required criterion, tab2seq now warns that those bounds
+are ignored. Required criteria that collapse the cohort to zero entities also
+emit a warning.
 
 The split table contains one row per entity with the split label and all static columns.
 
@@ -212,8 +215,6 @@ dataset = EventDataset(
         reference_date="1970-01-01",
         threshold_date="2021-01-01",
         include_after_threshold=True,
-        include_token_str=True,
-        embed_static_in_events=False,  # keep static features in a separate file
         relative_date_features=[
             RelativeDateRule(
                 source_static_column="labour__birthday",

@@ -144,8 +144,8 @@ for source in collection:
 from tab2seq.cohort import Cohort, CohortConfig, EntityInclusionCriteria
 
 criteria = [
-    EntityInclusionCriteria(source_name="health", required=False),
     EntityInclusionCriteria(source_name="labour", required=True, min_events=1),
+    EntityInclusionCriteria(source_name="income", required=True, min_events=1),
 ]
 
 cohort = Cohort(
@@ -160,6 +160,10 @@ split_cfg = CohortConfig(train_frac=0.7, val_frac=0.15, test_frac=0.15, seed=42)
 cohort.build_or_load_splits(split_cfg)
 print(f"Cohort size: {len(cohort)} entities")
 ```
+
+Only `required=True` criteria filter entities. Optional criteria are allowed for
+metadata and validation, but `min_events` and `max_events` on them are ignored
+with a warning.
 
 ## 4. Fit a Vocabulary (Train Split Only)
 

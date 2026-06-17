@@ -55,6 +55,13 @@ class ContinuousColConfig(ColumnConfig):
 class TemporalColConfig(ColumnConfig):
     """Ordering/sequencing column:  datetime, wave number, age, etc.
     
+    Args: 
+        is_primary (bool): Whether this column is the primary temporal column used for sequencing. 
+        If True, rows with nulls in this column will be dropped. Defaults to False.
+        col_type (str): Type of temporal column, either "datetime" or "ordinal". Defaults to "datetime".
+        origin (str): For datetime columns, the origin date for converting to numeric (e.g. "1970-01-01"). Ignored for ordinal columns.
+        unit (str): For datetime columns, the unit for converting to numeric, one of "days", "weeks", "months", "years", or "none". Ignored for ordinal columns.
+    
     Examples:
         ```
         TemporalColConfig(col_name="wave", is_primary=True, drop_na=True, col_type="ordinal")

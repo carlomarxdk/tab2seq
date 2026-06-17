@@ -29,21 +29,26 @@ class RelativeDateRule(BaseModel):
 
 class EventDatasetConfig(BaseModel):
     """Configuration for building and persisting tokenized event datasets.
+
     Args:
-        reference_date: Reference date used for computing time features (for the primary timestamp). Must be in ISO format (YYYY-MM-DD).
-        threshold_date: Threshold date used to filter out events occurring after this date. Must be in ISO format (YYYY-MM-DD).
-        include_after_threshold: If True, include events occurring after the threshold date instead of filtering them out.
-        include_token_str: Whether to include human-readable token strings in the output dataset for interpretability.
-        embed_static_in_events: Whether to include static attributes in each event row (denormalized) or keep them in a separate static table.
-        relative_date_features: List of rules to compute relative date features from event timestamps and static date columns.
-        output_dir: Optional directory path to persist the built dataset artifacts. If not provided, artifacts will not be persisted.
+        reference_date: Reference date for computing ``primary_time`` (days since this
+            date per event). Must be ISO format (YYYY-MM-DD).
+        threshold_date: Date used to flag post-threshold events.  Must be ISO format.
+            Only relevant when ``include_after_threshold=True``.
+        include_after_threshold: If ``True``, add an ``after_threshold`` boolean column
+            marking events that occur on or after ``threshold_date``.  These events can
+            then be filtered at access time via the ``include_after_threshold`` parameter
+            on :meth:`~tab2seq.datasets.EventDataset.get_entity_record`.
+        relative_date_features: Rules to compute per-event relative time features from
+            a static reference date (e.g. age at event from birthdate).  See
+            :class:`RelativeDateRule`.
+        output_dir: Optional directory for persisted dataset artifacts.  If ``None``,
+            artifacts are written alongside the cohort cache.
     """
 
     reference_date: str = "1970-01-01"
     threshold_date: str = "2100-01-01"
     include_after_threshold: bool = True
-    include_token_str: bool = True
-    embed_static_in_events: bool = False
     relative_date_features: list[RelativeDateRule] = Field(default_factory=list)
     output_dir: Path | None = None
 

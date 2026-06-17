@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import warnings
 from typing import Any
 
 from pydantic import BaseModel, Field, model_validator, field_validator
@@ -25,6 +26,8 @@ class EntityInclusionCriteria(BaseModel):
         required: If ``True``, entities must appear in this `Source`.
         min_events: Minimum number of events an entity must have
             in this `Source`. Only checked when ``required`` is ``True``.
+        max_events: Maximum number of events an entity may have
+            in this `Source`. Only checked when ``required`` is ``True``.
 
     """
 
@@ -40,6 +43,19 @@ class EntityInclusionCriteria(BaseModel):
 
     @model_validator(mode="after")
     def _validate_event_bounds(self) -> EntityInclusionCriteria:
+        if not self.required and (
+            self.min_events is not None or self.max_events is not None
+        ):
+            warnings.warn(
+                (
+                    f"EntityInclusionCriteria for source '{self.source_name}' has "
+                    "required=False, so min_events and max_events are ignored."
+                ),
+                UserWarning,
+                stacklevel=2,
+            )
+            return self
+
         if self.required:
             if self.min_events is None or self.min_events < 1:
                 raise ValueError(

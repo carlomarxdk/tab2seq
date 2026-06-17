@@ -9,6 +9,7 @@ from tab2seq.cohort import Cohort, CohortConfig, EntityInclusionCriteria
 from tab2seq.source import (
     CategoricalColConfig,
     ContinuousColConfig,
+    SchemaError,
     Source,
     SourceCollection,
     SourceConfig,
@@ -159,6 +160,43 @@ def test_inclusion_criteria_intersection(source_collection: SourceCollection, tm
     assert cohort.entity_ids == {"P001", "P002"}
 
 
+def test_optional_criteria_with_event_bounds_warn_and_do_not_filter(
+    source_collection: SourceCollection, tmp_path: Path
+):
+    """Optional criteria with bounds should warn and leave the cohort unchanged."""
+    with pytest.warns(UserWarning, match="required=False"):
+        criteria = EntityInclusionCriteria(
+            source_name="health",
+            required=False,
+            min_events=99,
+            max_events=100,
+        )
+
+    cohort = Cohort(
+        name="optional-bounds",
+        sources=source_collection,
+        inclusion_criteria=[criteria],
+        cache_dir=tmp_path / "cohorts",
+    )
+
+    assert cohort.entity_ids == {"P001", "P002", "P003", "P004"}
+
+
+def test_unknown_optional_criteria_source_raises(
+    source_collection: SourceCollection, tmp_path: Path
+):
+    """Unknown sources should fail even when the criteria is optional."""
+    with pytest.raises(KeyError, match="unknown source"):
+        Cohort(
+            name="unknown-source",
+            sources=source_collection,
+            inclusion_criteria=[
+                EntityInclusionCriteria(source_name="missing", required=False)
+            ],
+            cache_dir=tmp_path / "cohorts",
+        )
+
+
 def test_build_entities_table_with_static_columns(source_collection: SourceCollection, tmp_path: Path):
     """Entities table should contain entity_id and static columns from all sources."""
     cohort = Cohort(
@@ -281,3 +319,62 @@ def test_empty_cohort_produces_empty_tables(source_collection: SourceCollection,
     assert entity_df.height == 0
     assert split_df.height == 0
     assert "split" in split_df.columns
+
+
+def test_empty_required_criteria_logs_warning(
+    source_collection: SourceCollection, tmp_path: Path, caplog: pytest.LogCaptureFixture
+):
+    """Empty cohorts from required criteria should emit a warning."""
+    caplog.set_level("WARNING", logger="Cohort")
+
+    cohort = Cohort(
+        name="empty-warning",
+        sources=source_collection,
+        inclusion_criteria=[
+            EntityInclusionCriteria(source_name="health", required=True, min_events=99)
+        ],
+        cache_dir=tmp_path / "cohorts",
+    )
+
+    assert len(cohort) == 0
+    assert any(
+        "resolved to 0 entities" in record.message for record in caplog.records
+    )
+
+
+def test_missing_source_column_raises_clear_cohort_error(tmp_path: Path):
+    """Missing source columns should raise a cohort-facing schema error."""
+    df = pl.DataFrame(
+        {
+            "person_id": ["P001", "P002"],
+            "event_date": ["2020-01-01", "2020-02-01"],
+            "status": ["active", "inactive"],
+        }
+    )
+    path = tmp_path / "broken.parquet"
+    df.write_parquet(path)
+
+    source = Source(
+        SourceConfig(
+            name="broken-source",
+            filepath=path,
+            id_col="person_id",
+            temporal_cols=[
+                TemporalColConfig(
+                    col_name="event_date", is_primary=True, drop_na=True
+                )
+            ],
+            categorical_cols=[
+                CategoricalColConfig(col_name="status", prefix="STATUS"),
+                CategoricalColConfig(
+                    col_name="missing_region", prefix="REG", static=True
+                ),
+            ],
+        )
+    )
+
+    with pytest.raises(
+        SchemaError,
+        match="Failed to resolve entity IDs for cohort 'broken-cohort'.*broken-source.*missing_region",
+    ):
+        Cohort(name="broken-cohort", sources=source, cache_dir=tmp_path)
