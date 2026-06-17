@@ -4,13 +4,11 @@
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/tab2seq)](https://pypi.org/project/tab2seq/)
 [![PyPI - Status](https://img.shields.io/pypi/status/tab2seq)](https://pypi.org/project/tab2seq/)
 [![GitHub License](https://img.shields.io/github/license/carlomarxdk/tab2seq)](https://github.com/carlomarxdk/tab2seq/blob/main/LICENSE)
-[![DOI](https://zenodo.org/badge/1163020308.svg)](https://doi.org/10.5281/zenodo.18752504)
-
 
 **tab2seq** turns multi-source tabular event data (registries, EHR, financial records) into tokenized sequences ready for Transformer-based models: it generalizes the data processing pipeline from the [Life2Vec](https://github.com/SocialComplexityLab/life2vec) paper to arbitrary domains.
 
 > [!WARNING]
-> This is an **beta** package. The core pipeline (Sources → Cohort → Vocabulary → EventDataset) is functional but the API is not yet stable. Documentation is incomplete.  Pin to a specific version if you depend on current behaviour. See [Roadmap](#roadmap) to see what is implemented at this point.
+> This is an **alpha** package. The core pipeline (Sources → Cohort → Vocabulary → EventDataset) is functional but the API is not yet stable. Documentation is incomplete.  Pin to a specific version if you depend on current behaviour. See [TODOs](#roadmap) to see what is implemented at this point.
 
 ## Why tab2seq?
 
@@ -58,9 +56,21 @@ data_paths = generate_synthetic_data(
     output_dir="synthetic_data",
     n_entities=10_000,
     seed=742,
-    registries=["health", "labour"],
+    registries=["health", "labour", "survey", "income"],
 )
 pl.read_parquet(data_paths["health"]).head()
+```
+
+```text
+shape: (5, 7)
+┌───────────┬────────────┬───────────┬───────────┬──────────────────┬─────────┬────────────────┐
+│ entity_id ┆ date       ┆ diagnosis ┆ procedure ┆ department       ┆ cost    ┆ length_of_stay │
+│ str       ┆ date       ┆ str       ┆ str       ┆ str              ┆ f64     ┆ i64            │
+╞═══════════╪════════════╪═══════════╪═══════════╪══════════════════╪═════════╪════════════════╡
+│ E00001    ┆ 2016-09-15 ┆ J18.1     ┆ CABG      ┆ gastroenterology ┆ 7306.17 ┆ 2              │
+│ E00001    ┆ 2017-05-25 ┆ E78.0     ┆ XRAY      ┆ neurology        ┆  138.65 ┆ 1              │
+│ E00001    ┆ 2018-01-18 ┆ E78.0     ┆ MRI       ┆ general_surgery  ┆ 6704.59 ┆ 10             │
+└───────────┴────────────┴───────────┴───────────┴──────────────────┴─────────┴────────────────┘
 ```
 
 ### 2. Define Sources
@@ -84,11 +94,11 @@ configs = [
             CategoricalColConfig(col_name="department", prefix="DEPT"),
         ],
         continuous_cols=[
-            ContinuousColConfig(col_name="cost", prefix="COST", n_bins=20),
-            ContinuousColConfig(col_name="length_of_stay", prefix="LOS", n_bins=10),
+            ContinuousColConfig(col_name="cost", prefix="COST", n_bins=20, strategy="quantile"),
+            ContinuousColConfig(col_name="length_of_stay", prefix="LOS", n_bins=10, strategy="quantile"),
         ],
         temporal_cols=[
-            TemporalColConfig(col_name="date", is_primary=True, drop_na=True),
+            TemporalColConfig(col_name="date", is_primary=True, drop_na=True, col_type="datetime"),
         ],
     ),
     SourceConfig(
@@ -102,11 +112,11 @@ configs = [
             CategoricalColConfig(col_name="native_language", prefix="LANG", static=True),
         ],
         continuous_cols=[
-            ContinuousColConfig(col_name="weekly_hours", prefix="WEEKLY_HOURS", n_bins=10),
+            ContinuousColConfig(col_name="weekly_hours", prefix="WEEKLY_HOURS", n_bins=10, strategy="uniform"),
         ],
         temporal_cols=[
-            TemporalColConfig(col_name="date", is_primary=True, drop_na=True),
-            TemporalColConfig(col_name="birthday", static=True, drop_na=True),
+            TemporalColConfig(col_name="date", is_primary=True, drop_na=True, col_type="datetime"),
+            TemporalColConfig(col_name="birthday", static=True, drop_na=True, col_type="datetime"),
         ],
     ),
 ]
@@ -151,16 +161,38 @@ The split table contains one row per entity with the split label and all static 
 The vocabulary maps categorical values to token strings and bins continuous features—fitted exclusively on training entities to prevent leakage.
 
 ```python
-from tab2seq.config import TokenizerConfig
-from tab2seq.tokenization import Tokenizer, Vocabulary
+from tab2seq.tokenization import Tokenizer, Vocabulary, VocabularyConfig
 
-tok_cfg = TokenizerConfig()
-tok_cfg.vocabulary.min_token_count = 1
-tok_cfg.vocabulary.max_vocab_size = 50_000
+vocab = Vocabulary(
+    config=VocabularyConfig(
+        max_vocab_size=50_000,
+        min_token_count=5,
+        # [PAD]=0 [UNK]=1 [CLS]=2 [SEP]=3 [MASK]=4 are always reserved.
+        # Add domain-specific tokens that should always appear:
+        extra_tokens=["[DEATH]", "[RETIRED]"],
+    )
+)
+vocab_df = vocab.fit_from_cohort_train(cohort=cohort, split_config=split_cfg)
+print(f"Vocabulary size: {vocab_df.height}")
+```
 
-vocab = Vocabulary(tok_cfg.vocabulary)
-vocab.fit_from_cohort_train(cohort=cohort, split_config=split_cfg)
-print(f"Vocabulary size: {vocab.vocab_df.height}")
+`VocabularyConfig.count_mode` controls how token frequency is computed for
+`min_token_count` filtering:
+
+- `overall`: counts every token occurrence across all train events.
+- `entity_unique`: counts each token at most once per entity.
+
+Use `entity_unique` to reduce dominance from very prolific entities.
+
+Two helpers are useful for inspecting a fitted vocabulary before encoding:
+
+```python
+# Column → prefix mapping per source
+print(vocab.column_prefixes("health"))
+# {'cost': 'COST', 'length_of_stay': 'LOS', 'diagnosis': 'DIAG', ...}
+
+# Bin edges for a continuous column (fitted on train data only)
+print(vocab.bin_edges_for("health", "cost"))
 ```
 
 ### 5. Build and Persist Tokenized Event Datasets
@@ -178,49 +210,125 @@ dataset = EventDataset(
         threshold_date="2021-01-01",
         include_after_threshold=True,
         include_token_str=True,
+        embed_static_in_events=False,  # keep static features in a separate file
         relative_date_features=[
             RelativeDateRule(
                 source_static_column="labour__birthday",
                 output_column="age_years",
                 unit="years",
+                floor_int=True,
             ),
         ],
     ),
 )
 
-artifacts = dataset.write_parquet(force_recompute_splits=True)
-print(artifacts.split_paths)
+artifacts = dataset.write_parquet(dataset_name="my_dataset_v1", force_write=True)
+print(artifacts.dataset_dir)
 ```
 
-### 6. Load a Precomputed Dataset by Name
+### 6. Load and Read Records
 
 You can reload a saved dataset without rebuilding sources, cohort, or tokenizer.
 
 ```python
 dataset_loaded = EventDataset.from_name(
-    name=dataset_name,
+    name="my_dataset_v1",
     registry_dir=cohort.cache_dir / "datasets",
 )
-
-sample = dataset_loaded.sample_entity_record("train", seed=42)
-print("Loaded-by-name sample entity:", sample["entity_id"] if sample else None)
 ```
 
-Three patterns for feeding records into a training loop:
+Four access patterns are available on any `EventDataset`:
 
 ```python
+# Fetch a specific entity by ID (returns None if not in that split)
+record = dataset_loaded.get_entity_record("E00003", split="train")
+
+# Random sample
+record = dataset_loaded.sample_entity_record(split="train", seed=7)
+
 # Full iterator sweep
-for record in dataset.iter_entity_records(split="train", shuffle=True, seed=42):
+for record in dataset_loaded.iter_entity_records(split="train", shuffle=True, seed=42):
     # record = {"entity_id": ..., "split": ..., "static": {...}, "events": [...]}
     pass
 
-# Random sample
-record = dataset.sample_entity_record(split="train", seed=7)
-
-# Stateful next() — remembers position across calls
-record = dataset.next_entity_record(split="train", shuffle=True, seed=0, reset=True)
+# Stateful one-at-a-time — remembers position across calls, returns None when exhausted
+record = dataset_loaded.next_entity_record(split="val", shuffle=True, seed=0, reset=True)
 while record is not None:
-    record = dataset.next_entity_record(split="train", shuffle=True, seed=0)
+    record = dataset_loaded.next_entity_record(split="val", shuffle=True, seed=0)
+```
+
+All four methods accept a `format` parameter:
+
+| Format | Returns | Best for |
+| ------ | ------- | -------- |
+| `"raw"` | Python dicts (one dict per event) | inspection, custom collation |
+| `"frame"` | Polars DataFrames | filtering, feature analysis |
+| `"tensor"` | Flat NumPy arrays + event lengths | custom PyTorch/JAX collation |
+| `"padded_tensor"` | 2-D padded NumPy matrix + attention mask | direct DataLoader use |
+
+#### `raw` (default)
+
+```python
+record = dataset_loaded.sample_entity_record("train", seed=42, format="raw")
+# record["entity_id"]  → str
+# record["split"]      → "train" | "val" | "test"
+# record["static"]     → {"entity_id": ..., "labour__birthday": ..., "token_ids": [...], ...}
+# record["events"]     → list of dicts, one per event:
+#   event["primary_timestamp"]  → "2015-01-01"
+#   event["source_name"]        → "labour"
+#   event["token_ids"]          → [105, 86, 98, 110, 3]
+#   event["age_years"]          → 28   # relative-date feature
+```
+
+#### `frame`
+
+Returns Polars DataFrames — avoids `to_dicts()` overhead for downstream filtering.
+
+```python
+record = dataset_loaded.sample_entity_record("train", seed=7, format="frame")
+# record["entity_id"]       → str
+# record["static_token_ids"] → list[int]
+# record["events"]           → polars.DataFrame with columns:
+#   primary_timestamp, source_name, token_ids (list[i64]), age_years, ...
+```
+
+#### `tensor`
+
+Returns flat NumPy arrays. `token_ids` concatenates all events into a single 1-D array;
+use `event_lengths` to split them back per event. `temporal` stacks `time` and any
+relative-date features into a `[num_events, T]` float array.
+
+Pass `include_cls=True` to prepend a `[CLS]` token to the sequence and `include_sep=True`
+to insert a `[SEP]` token between events.
+
+```python
+record = dataset_loaded.sample_entity_record(
+    "train", seed=7, format="tensor", include_cls=True, include_sep=True
+)
+# record["token_ids"]       → ndarray shape (total_tokens,)  — all events concatenated
+# record["event_lengths"]   → ndarray shape (num_events,)    — tokens per event
+# record["time"]            → ndarray shape (num_events,)    — days since reference_date
+# record["temporal"]        → ndarray shape (num_events, T)  — time + rel-date features
+# record["static_token_ids"] → list[int]
+
+# Reconstruct per-event token lists
+import numpy as np
+per_event = np.split(record["token_ids"], np.cumsum(record["event_lengths"])[:-1])
+```
+
+#### `padded_tensor`
+
+Like `tensor` but produces a 2-D `[num_events, max_event_len]` matrix padded with
+`pad_id`. Drops directly into a PyTorch DataLoader without further collation.
+
+```python
+record = dataset_loaded.sample_entity_record(
+    "train", seed=7, format="padded_tensor", pad_id=0
+)
+# record["token_ids"]        → ndarray shape (num_events, max_event_len)
+# record["attention_mask"]   → bool ndarray shape (num_events, max_event_len)
+# record["time"]             → ndarray shape (num_events,)
+# record["static_token_ids"] → list[int]
 ```
 
 ## Synthetic Registries
