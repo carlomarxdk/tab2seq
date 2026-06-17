@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tab2seq"
-version = "0.1.8"
+version = "0.1.9"
 description = "Transform tabular event data into sequences ready for Transformer and Sequential models: Life2Vec, BEHRT and more."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -13,7 +13,7 @@ authors = [
     {name = "Germans Savcisens", email = "germans@savcisens.com"}
 ]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
@@ -46,20 +46,18 @@ dev = [
     "types-PyYAML>=6.0.0",
     ]
 docs = [
-    "zensical",
-    "mkdocstrings-python>=2.0.0",   
-    "mkdocs-gen-files>=0.6.0",      
-    "mkdocs-literate-nav>=0.6.2",   
-    "mkdocs-bibtex>=4.4.0",         
+    "mkdocs-material>=9.5",
+    "mkdocstrings-python>=2.0.0",
+    "mkdocs-gen-files>=0.6.0",
+    "mkdocs-literate-nav>=0.6.2",
 ]
-
 all = ["tab2seq[dev,docs]"]
 
 [project.urls]
 Homepage = "https://github.com/carlomarxdk/tab2seq"
-Documentation = "https://tab2seq.readthedocs.io"
 Repository = "https://github.com/carlomarxdk/tab2seq"
 Issues = "https://github.com/carlomarxdk/tab2seq/issues"
+DOI = "https://doi.org/10.5281/zenodo.18752504"
 
 [tool.setuptools.packages.find]
 where = ["src"]
