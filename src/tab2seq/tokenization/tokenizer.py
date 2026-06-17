@@ -116,11 +116,12 @@ class Tokenizer:
             List of integer token IDs.
         """
         t2i = self.vocabulary.token2index
-        unk_id = self._special_id(self.config.unk_token)
-        cls_id = self._special_id(self.config.cls_token)
-        sep_id = self._special_id(self.config.sep_token)
+        unk_id = self._special_id(self.vocabulary.config.unk_token)
+        cls_id = self._special_id(self.vocabulary.config.cls_token)
+        sep_id = self._special_id(self.vocabulary.config.sep_token)
 
         col_categories = self.vocabulary.column_categories(source_name)
+        col_prefixes = self.vocabulary.column_prefixes(source_name)
         cols = self._resolve_columns(events, columns, col_categories)
 
         token_ids: list[int] = [cls_id]
@@ -131,15 +132,16 @@ class Tokenizer:
                 if value is None:
                     continue
 
+                tok_prefix = col_prefixes.get(col, col)
                 if col_categories.get(col) == "continuous_bin":
                     edges = self.vocabulary.bin_edges_for(source_name, col)
                     if edges is None:
                         token_ids.append(unk_id)
                         continue
                     bin_idx = self._assign_bin(float(value), edges)
-                    token = f"{source_name}__{col}__BIN_{bin_idx}"
+                    token = f"{source_name}__{tok_prefix}__BIN_{bin_idx}"
                 else:
-                    token = f"{source_name}__{col}__{value}"
+                    token = f"{source_name}__{tok_prefix}__{value}"
 
                 token_ids.append(t2i.get(token, unk_id))
 
@@ -177,10 +179,11 @@ class Tokenizer:
             ``token_str: Utf8`` if ``include_token_str`` is ``True``.
         """
         col_categories = self.vocabulary.column_categories(source_name)
+        col_prefixes = self.vocabulary.column_prefixes(source_name)
         cols = self._resolve_columns(events, columns, col_categories)
 
         t2i = self.vocabulary.token2index
-        unk_id = self._special_id(self.config.unk_token)
+        unk_id = self._special_id(self.vocabulary.config.unk_token)
 
         token_str_cols: list[str] = []
         token_id_cols: list[str] = []
@@ -188,14 +191,14 @@ class Tokenizer:
 
         for col in cols:
             cat = col_categories[col]
-            prefix = f"{source_name}__{col}__"
+            tok_prefix = f"{source_name}__{col_prefixes.get(col, col)}__"
             tok_alias = f"__tok_{col}"
             id_alias = f"__tid_{col}"
 
             if cat == "categorical":
                 exprs.append(
                     pl.when(pl.col(col).is_not_null())
-                    .then(pl.lit(prefix) + pl.col(col).cast(pl.Utf8))
+                    .then(pl.lit(tok_prefix) + pl.col(col).cast(pl.Utf8))
                     .otherwise(pl.lit(None, dtype=pl.Utf8))
                     .alias(tok_alias)
                 )
@@ -215,7 +218,7 @@ class Tokenizer:
                 )
                 tok_series = pl.Series(
                     tok_alias,
-                    [f"{prefix}BIN_{i}" for i in bin_indices],
+                    [f"{tok_prefix}BIN_{i}" for i in bin_indices],
                     dtype=pl.Utf8,
                 )
                 exprs.append(
@@ -285,7 +288,7 @@ class Tokenizer:
             List of token strings of the same length.
         """
         i2t = self.vocabulary.index2token
-        unk = self.config.unk_token
+        unk = self.vocabulary.config.unk_token
         return [i2t.get(tid, unk) for tid in token_ids]
 
     def pad_sequence(self, token_ids: list[int], max_length: int) -> list[int]:
@@ -301,8 +304,8 @@ class Tokenizer:
         Returns:
             List of exactly ``max_length`` token IDs.
         """
-        sep_id = self._special_id(self.config.sep_token)
-        pad_id = self._special_id(self.config.pad_token)
+        sep_id = self._special_id(self.vocabulary.config.sep_token)
+        pad_id = self._special_id(self.vocabulary.config.pad_token)
 
         if len(token_ids) >= max_length:
             return token_ids[:max_length - 1] + [sep_id]

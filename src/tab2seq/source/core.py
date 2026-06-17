@@ -197,26 +197,8 @@ class Source:
             Set of unique entity identifiers.
 
         """
-        ts_col_names = [col.col_name for col in (self.config.temporal_cols or [])]
-        drop_na_cols = [
-            col.col_name for col in (self.config.temporal_cols or []) if col.drop_na
-        ]
-
-        lf = (
-            self._scan_raw()
-            .select([self.config.id_col, *ts_col_names])
-            .cast({self.config.id_col: pl.Utf8})
-        )
-
-        if drop_na_cols:
-            logger.info(
-                "Source '%s': scanning for unique entities with temporal (datetime) column filtering",
-                self.name,
-            )
-            lf = lf.drop_nulls(subset=drop_na_cols)
-
         ids = (
-            lf.drop_nulls(subset=[self.config.id_col])
+            self.scan()
             .select(self.config.id_col)
             .unique()
             .collect()
@@ -230,65 +212,65 @@ class Source:
     # Preprocessing
     # ------------------------------------------------------------------
 
-    def process(self, cache: bool = True) -> pl.DataFrame:
-        """Apply preprocessing steps and optionally cache the result.
+    # def process(self, cache: bool = True) -> pl.DataFrame:
+    #     """Apply preprocessing steps and optionally cache the result.
 
-        Preprocessing steps performed:
+    #     Preprocessing steps performed:
 
-        * Rows with nulls in columns configured with ``drop_na=True`` are dropped.
-        * Categorical columns are cast to string (``pl.Utf8``) and prefixed with
-          ``{prefix}_`` (e.g. ``"I21.9"`` → ``"DIAG_I21.9"``).
+    #     * Rows with nulls in columns configured with ``drop_na=True`` are dropped.
+    #     * Categorical columns are cast to string (``pl.Utf8``) and prefixed with
+    #       ``{prefix}_`` (e.g. ``"I21.9"`` → ``"DIAG_I21.9"``).
 
-        .. note::
-            Continuous column binning is intentionally **not** performed here to
-            prevent data leakage; it must be applied after the train/test split.
+    #     .. note::
+    #         Continuous column binning is intentionally **not** performed here to
+    #         prevent data leakage; it must be applied after the train/test split.
 
-        If *cache* is enabled, the processed DataFrame is saved to a cache
-        file in ``{self.config.cache_dir}/intermediate/{self.name}/`` (format controlled by
-        :attr:`SourceConfig.output_format`). On subsequent calls with the same
-        configuration the cached file is read instead of reprocessing.
+    #     If *cache* is enabled, the processed DataFrame is saved to a cache
+    #     file in ``{self.config.cache_dir}/intermediate/{self.name}/`` (format controlled by
+    #     :attr:`SourceConfig.output_format`). On subsequent calls with the same
+    #     configuration the cached file is read instead of reprocessing.
 
-        Args:
-            cache: Whether to cache the processed DataFrame to disk for future reuse.
+    #     Args:
+    #         cache: Whether to cache the processed DataFrame to disk for future reuse.
 
-        Returns:
-            Processed :class:`polars.DataFrame`.
+    #     Returns:
+    #         Processed :class:`polars.DataFrame`.
 
-        """
-        # TODO: Add a test that checks whether the continuous column binning is not applied in this method, and that it is applied in the appropriate place after the train/test split.
-        # TODO: find better way to handle cache_path
-        cache_path: Path = Path("")
-        if cache:
-            intermediate_dir = Path(self.config.cache_dir) / "intermediate" / self.name
-            intermediate_dir.mkdir(parents=True, exist_ok=True)
+    #     """
+    #     # TODO: Add a test that checks whether the continuous column binning is not applied in this method, and that it is applied in the appropriate place after the train/test split.
+    #     # TODO: find better way to handle cache_path
+    #     cache_path: Path = Path("")
+    #     if cache:
+    #         intermediate_dir = Path(self.config.cache_dir) / "intermediate" / self.name
+    #         intermediate_dir.mkdir(parents=True, exist_ok=True)
 
-            ext = self.config.output_format
-            cache_path = intermediate_dir / f"{self._config_hash()}.{ext}"
+    #         ext = self.config.output_format
+    #         cache_path = intermediate_dir / f"{self._config_hash()}.{ext}"
 
-            if cache_path.exists():
-                logger.info(
-                    "Source '%s': loading preprocessed data from cache %s",
-                    self.name,
-                    cache_path,
-                )
-                if ext == "parquet":
-                    return pl.read_parquet(cache_path)
-                return pl.read_csv(cache_path)
+    #         if cache_path.exists():
+    #             logger.info(
+    #                 "Source '%s': loading preprocessed data from cache %s",
+    #                 self.name,
+    #                 cache_path,
+    #             )
+    #             if ext == "parquet":
+    #                 return pl.read_parquet(cache_path)
+    #             return pl.read_csv(cache_path)
 
-        df = self._apply_preprocessing()
+    #     df = self._apply_preprocessing()
 
-        if cache:
-            logger.info(
-                "Source '%s': saving preprocessed data to cache %s",
-                self.name,
-                cache_path,
-            )
-            if ext == "parquet":
-                df.write_parquet(cache_path)
-            else:
-                df.write_csv(cache_path)
+    #     if cache:
+    #         logger.info(
+    #             "Source '%s': saving preprocessed data to cache %s",
+    #             self.name,
+    #             cache_path,
+    #         )
+    #         if ext == "parquet":
+    #             df.write_parquet(cache_path)
+    #         else:
+    #             df.write_csv(cache_path)
 
-        return df
+    #     return df
 
     # ------------------------------------------------------------------
     # Private helpers

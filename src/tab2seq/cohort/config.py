@@ -9,6 +9,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, model_validator, field_validator
 
+from tab2seq._validators import validate_no_whitespace_string
+
 logger = logging.getLogger("CohortConfig")
 
 
@@ -34,15 +36,7 @@ class EntityInclusionCriteria(BaseModel):
     @field_validator("source_name", mode="before")
     @classmethod
     def _no_whitespace_string(cls, v: str, info: Any) -> str:
-        if not isinstance(v, str) or not v.strip():
-            raise ValueError(
-                f"'{info.field_name}' must be a non-empty, non-whitespace string."
-            )
-        if v != v.strip():
-            raise ValueError(
-                f"'{info.field_name}' cannot have leading or trailing whitespace."
-            )
-        return v
+        return validate_no_whitespace_string(v, info)
 
     @model_validator(mode="after")
     def _validate_event_bounds(self) -> EntityInclusionCriteria:

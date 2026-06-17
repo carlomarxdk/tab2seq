@@ -368,8 +368,8 @@ class TestSource:
         assert df.height == 4
         assert "person_id" in df.columns
 
-    def test_source_process_no_cache(self, health_parquet_file):
-        """Test Source.process() without caching."""
+    def test_source_scan_casts_ids_to_utf8_and_sorts_rows(self, health_parquet_file):
+        """Test scan normalizes entity IDs and sorts by entity and temporal columns."""
         config = SourceConfig(
             name="health",
             filepath=health_parquet_file,
@@ -382,14 +382,21 @@ class TestSource:
             ],
         )
         source = Source(config)
-        df = source.process(cache=False)
+        df = source.read_all()
         assert isinstance(df, pl.DataFrame)
         assert df.height == 5
-        # Verify categorical columns are cast to string
-        assert df["diagnosis"].dtype == pl.Utf8
+        assert df["patient_id"].dtype == pl.Utf8
+        assert df["patient_id"].to_list() == ["P001", "P001", "P002", "P002", "P003"]
+        assert df["date"].to_list() == [
+            "2020-01-01",
+            "2020-02-01",
+            "2020-01-15",
+            "2020-03-01",
+            "2020-01-20",
+        ]
 
-    def test_source_process_prefix_addition(self, health_parquet_file):
-        """Test Source.process() adds prefixes to categorical values."""
+    def test_source_apply_preprocessing_adds_categorical_prefixes(self, health_parquet_file):
+        """Test preprocessing helper prefixes categorical values without binning."""
         config = SourceConfig(
             name="health",
             filepath=health_parquet_file,
@@ -401,26 +408,38 @@ class TestSource:
                 CategoricalColConfig(col_name="diagnosis", prefix="DIAG"),
                 CategoricalColConfig(col_name="department", prefix="DEPT"),
             ],
+            continuous_cols=[ContinuousColConfig(col_name="cost", prefix="COST")],
         )
         source = Source(config)
-        df = source.process(cache=False)
+        df = source._apply_preprocessing()
 
-        # Assert that diagnosis values have DIAG_ prefix
+        assert df["diagnosis"].dtype == pl.Utf8
         diagnosis_values = df["diagnosis"].to_list()
         expected_diagnosis = ["DIAG_I21.0", "DIAG_I21.9", "DIAG_J18.1", "DIAG_E11.9", "DIAG_M54.5"]
         assert diagnosis_values == expected_diagnosis
 
-        # Assert that department values have DEPT_ prefix
         department_values = df["department"].to_list()
         expected_department = ["DEPT_cardiology", "DEPT_cardiology", "DEPT_pulmonology", "DEPT_endocrinology", "DEPT_orthopedics"]
         assert department_values == expected_department
+        assert df["cost"].to_list() == [1500.0, 2000.0, 800.0, 500.0, 300.0]
 
-    def test_source_process_with_cache_parquet(self, health_parquet_file):
-        """Test Source.process() with parquet caching."""
-        with tempfile.TemporaryDirectory() as tmpdir:
+    def test_source_scan_drops_null_primary_temporal_rows(self, sample_health_data):
+        """Test scan drops rows missing primary temporal values."""
+        data = sample_health_data.with_columns(
+            pl.when(pl.col("patient_id") == "P002")
+            .then(pl.lit(None, dtype=pl.Utf8))
+            .otherwise(pl.col("date"))
+            .alias("date")
+        )
+
+        with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as f:
+            data.write_parquet(f.name)
+            filepath = Path(f.name)
+
+        try:
             config = SourceConfig(
                 name="health",
-                filepath=health_parquet_file,
+                filepath=filepath,
                 id_col="patient_id",
                 temporal_cols=[
                     TemporalColConfig(col_name="date", is_primary=True, drop_na=True)
@@ -428,63 +447,13 @@ class TestSource:
                 categorical_cols=[
                     CategoricalColConfig(col_name="diagnosis", prefix="DIAG")
                 ],
-                output_format="parquet",
-                output_folder=tmpdir,
             )
             source = Source(config)
-
-            # First call: should save to cache
-            df1 = source.process(cache=True)
-            assert isinstance(df1, pl.DataFrame)
-            assert df1.height == 5
-
-            # Verify cache file was created
-            cache_dir = Path(tmpdir) / "intermediate" / "health"
-            cache_files = list(cache_dir.glob("*.parquet"))
-            assert len(cache_files) == 1
-            mtime_after_first = cache_files[0].stat().st_mtime
-
-            # Second call: should read from cache (file must not be modified)
-            df2 = source.process(cache=True)
-            assert isinstance(df2, pl.DataFrame)
-            assert df2.height == 5
-            assert cache_files[0].stat().st_mtime == mtime_after_first
-
-            # Verify the data is the same
-            assert_frame_equal(df1, df2)
-
-    def test_source_process_with_cache_csv(self, income_csv_file):
-        """Test Source.process() with CSV caching."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config = SourceConfig(
-                name="income",
-                filepath=income_csv_file,
-                id_col="person_id",
-                temporal_cols=[
-                    TemporalColConfig(col_name="year", is_primary=True, drop_na=True)
-                ],
-                categorical_cols=[
-                    CategoricalColConfig(col_name="income_type", prefix="INCOME")
-                ],
-                output_format="csv",
-                output_folder=tmpdir,
-            )
-            source = Source(config)
-
-            # First call: should save to cache
-            df1 = source.process(cache=True)
-            assert isinstance(df1, pl.DataFrame)
-            assert df1.height == 4
-
-            # Verify cache file was created
-            cache_dir = Path(tmpdir) / "intermediate" / "income"
-            cache_files = list(cache_dir.glob("*.csv"))
-            assert len(cache_files) == 1
-
-            # Second call: should read from cache
-            df2 = source.process(cache=True)
-            assert isinstance(df2, pl.DataFrame)
-            assert df2.height == 4
+            df = source.read_all()
+            assert df.height == 3
+            assert "P002" not in df["patient_id"].to_list()
+        finally:
+            filepath.unlink()
 
 
 class TestSourceCollection:

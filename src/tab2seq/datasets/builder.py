@@ -37,7 +37,9 @@ from datetime import date, datetime
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, Literal
+
+RecordFormat = Literal["raw", "frame", "tensor", "padded_tensor"]
 
 import numpy as np
 import polars as pl
@@ -619,6 +621,10 @@ class EventDataset:
         self,
         entity_id: str,
         split: str,
+        format: RecordFormat = "raw",
+        pad_id: int = 0,
+        include_cls: bool = True,
+        include_sep: bool = True,
         force_recompute_splits: bool = False,
     ) -> dict[str, Any] | None:
         """Return one entity payload with static attributes and event rows.
@@ -626,90 +632,91 @@ class EventDataset:
         Args:
             entity_id: Entity ID to retrieve.
             split: Split name (``'train'``, ``'val'``, ``'test'``).
+            format: Output format. One of:
+
+                - ``'raw'`` *(default)* — nested Python dicts, one dict per event.
+                - ``'frame'`` — raw Polars DataFrames; avoids ``to_dicts()`` overhead.
+                - ``'tensor'`` — NumPy arrays with flat concatenated token IDs,
+                  per-event lengths, time, a ``[num_events, T]`` temporal matrix,
+                  and static token IDs.
+                - ``'padded_tensor'`` — like ``'tensor'`` but token IDs are a
+                  ``[num_events, max_event_len]`` matrix padded with ``pad_id``,
+                  plus a matching boolean ``attention_mask``.
+
+            pad_id: Padding value for ``'padded_tensor'`` format (default ``0``).
+            include_cls: If ``True`` (default), prepend a ``[CLS]`` token to the
+                sequence.  For ``'tensor'``: inserted at position 0 of the flat
+                ``token_ids`` array (does not affect ``event_lengths``).
+                For ``'padded_tensor'``: prepended as an extra leading row
+                ``[CLS, pad, …]`` in ``token_ids`` / ``attention_mask``, with a
+                corresponding 0 prepended to ``time`` / ``temporal``.
+                Silently ignored for ``'raw'`` and ``'frame'``.
+            include_sep: If ``True`` (default), append a ``[SEP]`` token to each
+                event's token IDs across all formats.  For ``'tensor'``, the extra
+                SEP is reflected in ``event_lengths``.  For ``'padded_tensor'``, it
+                is appended before padding so ``max_event_len`` grows by one.
             force_recompute_splits: Clear caches and recompute from scratch.
 
         Returns:
-            Dict with keys ``entity_id``, ``split``, ``static`` (dict), and
-            ``events`` (list of dicts), or ``None`` if not found.
+            Dict with format-dependent keys, or ``None`` if the entity is not found.
+
+            ``'raw'``: ``entity_id``, ``split``, ``static`` (dict), ``events`` (list of dicts).
+
+            ``'frame'``: ``entity_id``, ``split``, ``events`` (DataFrame),
+            ``static`` (DataFrame), ``static_token_ids`` (list), ``static_token_str`` (str).
+
+            ``'tensor'``: ``entity_id``, ``split``, ``token_ids`` (int64 [total_tokens]),
+            ``event_lengths`` (int64 [E]), ``time`` (int64 [E]),
+            ``temporal`` (float64 [E, T]), ``static_token_ids`` (int64 [S]).
+
+            ``'padded_tensor'``: same as ``'tensor'`` but ``token_ids`` is
+            int64 [E(+1), max_len] and ``attention_mask`` (bool [E(+1), max_len]) is
+            added; ``event_lengths`` is omitted.  The ``+1`` row appears when
+            ``include_cls=True``.
         """
         events_df, static_df = self._get_split_bundle(split, force_recompute_splits)
         event_ranges, static_index, _ = self._split_entity_index[split]
         entity_id = str(entity_id)
 
         event_slice = event_ranges.get(entity_id)
-        events_for_entity = (
+        events_slice = (
             events_df.slice(*event_slice)
             if event_slice is not None
             else events_df.clear()
         )
 
         static_row_idx = static_index.get(entity_id)
-        static_for_entity = (
+        static_slice = (
             static_df.slice(static_row_idx, 1)
             if static_row_idx is not None
             else static_df.clear()
         )
 
-        if events_for_entity.is_empty() and static_for_entity.is_empty():
+        if events_slice.is_empty() and static_slice.is_empty():
             return None
 
-        static_payload: dict[str, Any] = {
-            "entity_id": entity_id,
-            "split": split,
-            "token_ids": [],
-            "token_str": "",
-        }
-        if not static_for_entity.is_empty():
-            row = static_for_entity.to_dicts()[0]
-            static_payload.update(row)
+        static_payload = self._compute_static_tokens(static_slice, entity_id, split)
 
-            # Tokenize static attributes into the same vocabulary space.
-            feature_keys = sorted(
-                key
-                for key in static_payload
-                if key not in {"entity_id", "split", "token_ids", "token_str"}
-            )
-            tokens: list[str] = []
-            unk_id = self.tokenizer.token2index.get(self.tokenizer.config.unk_token)
-            if unk_id is None:
-                raise ValueError("Tokenizer vocabulary is missing the UNK special token.")
-
-            token_ids: list[int] = []
-            for key in feature_keys:
-                value = static_payload.get(key)
-                if value is None:
-                    continue
-                if isinstance(value, (date, datetime, np.datetime64)):
-                    continue
-                if isinstance(value, str):
-                    try:
-                        date.fromisoformat(value)
-                        continue
-                    except ValueError:
-                        pass
-                    try:
-                        datetime.fromisoformat(value)
-                        continue
-                    except ValueError:
-                        pass
-                token = f"{key}__{value}"
-                tokens.append(token)
-                token_ids.append(self.tokenizer.token2index.get(token, unk_id))
-
-            static_payload["token_ids"] = token_ids
-            static_payload["token_str"] = " ".join(tokens)
-
-        return {
-            "entity_id": entity_id,
-            "split": split,
-            "static": static_payload,
-            "events": events_for_entity.to_dicts(),
-        }
+        if format == "raw":
+            return self._as_raw(entity_id, split, events_slice, static_payload, include_sep)
+        if format == "frame":
+            return self._as_frame(entity_id, split, events_slice, static_slice, static_payload, include_sep)
+        if format == "tensor":
+            return self._as_tensor(entity_id, split, events_slice, static_payload, include_cls, include_sep)
+        if format == "padded_tensor":
+            return self._as_padded_tensor(entity_id, split, events_slice, static_payload, pad_id, include_cls, include_sep)
+        raise ValueError(
+            f"Unknown format {format!r}. Expected 'raw', 'frame', 'tensor', or 'padded_tensor'."
+        )
 
     def sample_entity_record(
         self,
         split: str,
         seed: int | None = None,
+        format: RecordFormat = "raw",
+        pad_id: int = 0,
+        include_cls: bool = True,
+        include_sep: bool = True,
         force_recompute_splits: bool = False,
     ) -> dict[str, Any] | None:
         """Return one randomly sampled entity record from a split.
@@ -717,6 +724,10 @@ class EventDataset:
         Args:
             split: Split name.
             seed: Optional random seed for reproducibility.
+            format: Output format — see :meth:`get_entity_record` for options.
+            pad_id: Padding value used when ``format='padded_tensor'``.
+            include_cls: Prepend ``[CLS]`` — see :meth:`get_entity_record`.
+            include_sep: Append ``[SEP]`` to each event — see :meth:`get_entity_record`.
             force_recompute_splits: Clear caches and recompute from scratch.
 
         Returns:
@@ -728,13 +739,20 @@ class EventDataset:
             return None
         rng = np.random.default_rng(seed)
         chosen = str(rng.choice(np.array(entity_ids, dtype=object)))
-        return self.get_entity_record(chosen, split=split)
+        return self.get_entity_record(
+            chosen, split=split, format=format, pad_id=pad_id,
+            include_cls=include_cls, include_sep=include_sep,
+        )
 
     def iter_entity_records(
         self,
         split: str,
         shuffle: bool = False,
         seed: int | None = None,
+        format: RecordFormat = "raw",
+        pad_id: int = 0,
+        include_cls: bool = True,
+        include_sep: bool = True,
         force_recompute_splits: bool = False,
     ) -> Iterator[dict[str, Any]]:
         """Iterate all entity records in a split.
@@ -743,6 +761,10 @@ class EventDataset:
             split: Split name.
             shuffle: Shuffle entity order before iteration.
             seed: Optional random seed for reproducibility.
+            format: Output format — see :meth:`get_entity_record` for options.
+            pad_id: Padding value used when ``format='padded_tensor'``.
+            include_cls: Prepend ``[CLS]`` — see :meth:`get_entity_record`.
+            include_sep: Append ``[SEP]`` to each event — see :meth:`get_entity_record`.
             force_recompute_splits: Clear caches and recompute from scratch.
 
         Yields:
@@ -759,7 +781,10 @@ class EventDataset:
             ]
 
         for entity_id in entity_ids:
-            record = self.get_entity_record(str(entity_id), split=split)
+            record = self.get_entity_record(
+                str(entity_id), split=split, format=format, pad_id=pad_id,
+                include_cls=include_cls, include_sep=include_sep,
+            )
             if record is not None:
                 yield record
 
@@ -769,6 +794,10 @@ class EventDataset:
         shuffle: bool = False,
         seed: int | None = None,
         reset: bool = False,
+        format: RecordFormat = "raw",
+        pad_id: int = 0,
+        include_cls: bool = True,
+        include_sep: bool = True,
         force_recompute_splits: bool = False,
     ) -> dict[str, Any] | None:
         """Return the next entity record in sweep order, or ``None`` when exhausted.
@@ -781,6 +810,10 @@ class EventDataset:
             shuffle: Shuffle entity order.
             seed: Optional random seed for reproducibility.
             reset: Reset iteration state for this split/shuffle/seed combination.
+            format: Output format — see :meth:`get_entity_record` for options.
+            pad_id: Padding value used when ``format='padded_tensor'``.
+            include_cls: Prepend ``[CLS]`` — see :meth:`get_entity_record`.
+            include_sep: Append ``[SEP]`` to each event — see :meth:`get_entity_record`.
             force_recompute_splits: Clear caches and recompute from scratch.
 
         Returns:
@@ -808,7 +841,244 @@ class EventDataset:
 
         entity_id = str(state["order"][index])
         state["index"] = index + 1
-        return self.get_entity_record(entity_id, split=split)
+        return self.get_entity_record(
+            entity_id, split=split, format=format, pad_id=pad_id,
+            include_cls=include_cls, include_sep=include_sep,
+        )
+
+    # ------------------------------------------------------------------
+    # Private — record formatting
+    # ------------------------------------------------------------------
+
+    def _compute_static_tokens(
+        self,
+        static_slice: pl.DataFrame,
+        entity_id: str,
+        split: str,
+    ) -> dict[str, Any]:
+        """Build static entity payload with tokenized attributes."""
+        payload: dict[str, Any] = {
+            "entity_id": entity_id,
+            "split": split,
+            "token_ids": [],
+            "token_str": "",
+        }
+        if static_slice.is_empty():
+            return payload
+
+        row = static_slice.to_dicts()[0]
+        payload.update(row)
+
+        feature_keys = sorted(
+            key
+            for key in payload
+            if key not in {"entity_id", "split", "token_ids", "token_str"}
+        )
+        unk_id = self.tokenizer.token2index.get(self.tokenizer.vocabulary.config.unk_token)
+        if unk_id is None:
+            raise ValueError("Tokenizer vocabulary is missing the UNK special token.")
+
+        tokens: list[str] = []
+        token_ids: list[int] = []
+        for key in feature_keys:
+            value = payload.get(key)
+            if value is None:
+                continue
+            if isinstance(value, (date, datetime, np.datetime64)):
+                continue
+            if isinstance(value, str):
+                try:
+                    date.fromisoformat(value)
+                    continue
+                except ValueError:
+                    pass
+                try:
+                    datetime.fromisoformat(value)
+                    continue
+                except ValueError:
+                    pass
+            token = f"{key}__{value}"
+            tokens.append(token)
+            token_ids.append(self.tokenizer.token2index.get(token, unk_id))
+
+        payload["token_ids"] = token_ids
+        payload["token_str"] = " ".join(tokens)
+        return payload
+
+    def _as_raw(
+        self,
+        entity_id: str,
+        split: str,
+        events_slice: pl.DataFrame,
+        static_payload: dict[str, Any],
+        include_sep: bool = True,
+    ) -> dict[str, Any]:
+        """Return entity record as nested Python dicts (default behavior)."""
+        events = events_slice.to_dicts()
+        if include_sep:
+            sep_id = self._sep_id()
+            for event in events:
+                event["token_ids"] = list(event["token_ids"]) + [sep_id]
+        return {
+            "entity_id": entity_id,
+            "split": split,
+            "static": static_payload,
+            "events": events,
+        }
+
+    def _as_frame(
+        self,
+        entity_id: str,
+        split: str,
+        events_slice: pl.DataFrame,
+        static_slice: pl.DataFrame,
+        static_payload: dict[str, Any],
+        include_sep: bool = True,
+    ) -> dict[str, Any]:
+        """Return entity record with raw Polars DataFrames; avoids to_dicts() overhead."""
+        if include_sep:
+            sep_id = self._sep_id()
+            n = len(events_slice)
+            events_slice = events_slice.with_columns(
+                pl.col("token_ids").list.concat(
+                    pl.Series("", [[sep_id]] * n, dtype=pl.List(pl.Int64))
+                )
+            )
+        return {
+            "entity_id": entity_id,
+            "split": split,
+            "events": events_slice,
+            "static": static_slice,
+            "static_token_ids": static_payload["token_ids"],
+            "static_token_str": static_payload["token_str"],
+        }
+
+    def _as_tensor(
+        self,
+        entity_id: str,
+        split: str,
+        events_slice: pl.DataFrame,
+        static_payload: dict[str, Any],
+        include_cls: bool = True,
+        include_sep: bool = True,
+    ) -> dict[str, Any]:
+        """Return entity record as flat NumPy arrays suitable for model input."""
+        token_id_lists: list[list[int]] = events_slice["token_ids"].to_list()
+
+        if include_sep:
+            sep_id = self._sep_id()
+            token_id_lists = [t + [sep_id] for t in token_id_lists]
+
+        event_lengths = np.array([len(t) for t in token_id_lists], dtype=np.int64)
+        flat_tokens = (
+            np.concatenate(token_id_lists).astype(np.int64)
+            if token_id_lists
+            else np.array([], dtype=np.int64)
+        )
+
+        if include_cls:
+            flat_tokens = np.concatenate([[self._cls_id()], flat_tokens])
+
+        time = events_slice["primary_time"].to_numpy().astype(np.int64)
+        temporal = self._build_temporal_array(events_slice)
+        static_token_ids = np.array(static_payload["token_ids"], dtype=np.int64)
+
+        return {
+            "entity_id": entity_id,
+            "split": split,
+            "token_ids": flat_tokens,
+            "event_lengths": event_lengths,
+            "time": time,
+            "temporal": temporal,
+            "static_token_ids": static_token_ids,
+        }
+
+    def _as_padded_tensor(
+        self,
+        entity_id: str,
+        split: str,
+        events_slice: pl.DataFrame,
+        static_payload: dict[str, Any],
+        pad_id: int = 0,
+        include_cls: bool = True,
+        include_sep: bool = True,
+    ) -> dict[str, Any]:
+        """Return entity record as padded 2-D NumPy arrays for batched model input."""
+        token_id_lists: list[list[int]] = events_slice["token_ids"].to_list()
+
+        if include_sep:
+            sep_id = self._sep_id()
+            token_id_lists = [t + [sep_id] for t in token_id_lists]
+
+        num_events = len(token_id_lists)
+        max_len = max((len(t) for t in token_id_lists), default=0)
+
+        if include_cls:
+            # CLS occupies its own leading row; ensure at least one column slot.
+            max_len = max(max_len, 1)
+            cls_id = self._cls_id()
+            token_matrix = np.full((num_events + 1, max_len), fill_value=pad_id, dtype=np.int64)
+            attention_mask = np.zeros((num_events + 1, max_len), dtype=bool)
+            token_matrix[0, 0] = cls_id
+            attention_mask[0, 0] = True
+            for i, tokens in enumerate(token_id_lists):
+                n = len(tokens)
+                token_matrix[i + 1, :n] = tokens
+                attention_mask[i + 1, :n] = True
+        else:
+            token_matrix = np.full((num_events, max_len), fill_value=pad_id, dtype=np.int64)
+            attention_mask = np.zeros((num_events, max_len), dtype=bool)
+            for i, tokens in enumerate(token_id_lists):
+                n = len(tokens)
+                token_matrix[i, :n] = tokens
+                attention_mask[i, :n] = True
+
+        time = events_slice["primary_time"].to_numpy().astype(np.int64)
+        temporal = self._build_temporal_array(events_slice)
+        static_token_ids = np.array(static_payload["token_ids"], dtype=np.int64)
+
+        if include_cls:
+            time = np.concatenate([[0], time])
+            temporal = np.vstack([np.zeros((1, temporal.shape[1]), dtype=np.float64), temporal])
+
+        return {
+            "entity_id": entity_id,
+            "split": split,
+            "token_ids": token_matrix,
+            "attention_mask": attention_mask,
+            "time": time,
+            "temporal": temporal,
+            "static_token_ids": static_token_ids,
+        }
+
+    def _cls_id(self) -> int:
+        token = self.tokenizer.vocabulary.config.cls_token
+        t2i = self.tokenizer.token2index
+        if token not in t2i:
+            raise KeyError(f"Special token '{token}' missing from vocabulary.")
+        return t2i[token]
+
+    def _sep_id(self) -> int:
+        token = self.tokenizer.vocabulary.config.sep_token
+        t2i = self.tokenizer.token2index
+        if token not in t2i:
+            raise KeyError(f"Special token '{token}' missing from vocabulary.")
+        return t2i[token]
+
+    def _build_temporal_array(self, events_slice: pl.DataFrame) -> np.ndarray:
+        """Build float64 [num_events, T] temporal feature matrix.
+
+        Columns: ``primary_time`` followed by each relative-date-feature output column
+        in the order they appear in ``dataset_config.relative_date_features``.
+        """
+        n = len(events_slice)
+        rel_cols = [rule.output_column for rule in self.dataset_config.relative_date_features]
+        if n == 0:
+            return np.zeros((0, 1 + len(rel_cols)), dtype=np.float64)
+        parts = [events_slice["primary_time"].to_numpy()]
+        for col in rel_cols:
+            parts.append(events_slice[col].to_numpy())
+        return np.column_stack(parts).astype(np.float64)
 
     # ------------------------------------------------------------------
     # Private — caching and indexing
@@ -986,6 +1256,7 @@ class EventDataset:
         vocabulary.vocab_df = pl.read_parquet(vocab_path)
         vocabulary.bin_edges_df = pl.read_parquet(bin_edges_path)
         vocabulary.metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        vocabulary._build_lookup_dicts()
         return vocabulary
 
     @staticmethod
