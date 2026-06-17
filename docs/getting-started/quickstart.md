@@ -33,6 +33,58 @@ shape: (5, 7)
 
 Each `Source` describes one event table: its file path, ID column, timestamp, and feature columns.
 
+### Define one by one
+
+```python
+## Option 1: Source(SourceConfig)
+## Example with the health data
+source_H = Source(config=SourceConfig(
+    name="health",
+    filepath="synthetic_data/health.parquet",
+    id_col="entity_id",
+    categorical_cols=[
+        CategoricalColConfig(col_name="diagnosis", prefix="DIAG"),
+        CategoricalColConfig(col_name="procedure", prefix="PROC"),
+        CategoricalColConfig(col_name="department", prefix="DEPT"),
+    ],
+    continuous_cols=[
+        ContinuousColConfig(col_name="cost", prefix="COST", n_bins=20, strategy="quantile"),
+        ContinuousColConfig(col_name="length_of_stay", prefix="LOS", n_bins=20, strategy="quantile"),
+    ],
+    temporal_cols=[
+        TemporalColConfig(col_name="date", is_primary=True, drop_na=True, col_type="datetime")
+    ],
+    output_format="parquet",
+))
+
+## Option 2: SourceConfig -> Source
+## Example with the labor data
+config_L = SourceConfig(
+    name="labour",
+    filepath="synthetic_data/labour.parquet",
+    id_col="entity_id",
+    categorical_cols=[
+        CategoricalColConfig(col_name="status", prefix="STATUS"),
+        CategoricalColConfig(col_name="occupation", prefix="OCC"),
+        CategoricalColConfig(col_name="residence_region", prefix="REGION"),
+        CategoricalColConfig(col_name="native_language", prefix="LANG", static=True),
+    ],
+    continuous_cols=[
+        ContinuousColConfig(col_name="weekly_hours", prefix="WEEKLY_HOURS")
+    ],
+    temporal_cols=[
+        TemporalColConfig(col_name="date", is_primary=True, drop_na=True, col_type="datetime"),
+        TemporalColConfig(col_name="birthday", is_primary=False, static=True, drop_na=True, col_type="datetime"),
+    ],
+    output_format="parquet",
+)
+source_L = Source(config=config_L)
+```
+
+You can then pass the sources to the `Cohort` object as a list `[source_H, source_L]`.
+
+### Define via `Source Collection`
+
 ```python
 from tab2seq.source import (
     Source, SourceCollection, SourceConfig,

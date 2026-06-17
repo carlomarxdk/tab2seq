@@ -168,6 +168,21 @@ class SourceConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _check_static_source_has_static_cols(self) -> SourceConfig:
+        if self.temporal_cols:
+            return self
+        all_feature_cols = (self.categorical_cols or []) + (self.continuous_cols or [])
+        non_static = [col.col_name for col in all_feature_cols if not col.static]
+        if non_static:
+            raise ValueError(
+                f"Source '{self.name}' has no temporal columns, so it is treated as a static "
+                f"source, but the following feature columns are not marked 'static=True': "
+                f"{non_static}. Either add temporal_cols to make it an event source, or set "
+                f"'static=True' on all feature columns."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _check_at_most_one_primary_timestamp(self) -> SourceConfig:
         if not self.temporal_cols:
             return self
@@ -234,4 +249,3 @@ class SourceConfig(BaseModel):
         if not self.temporal_cols:
             return None
         return next((col for col in self.temporal_cols if col.is_primary), None)
-
