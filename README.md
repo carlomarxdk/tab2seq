@@ -24,6 +24,8 @@ Building a [Life2Vec](https://github.com/SocialComplexityLab/life2vec)-style pip
 
 **Requires:** Python ≥ 3.11, Numpy ≥ 2.0,  Polars ≥ 1.38, Pydantic v2.
 
+**Documentation**: See [Documentation](https://carlomarxdk.github.io/tab2seq) for additional information.
+
 ## Pipeline
 
 ```text
