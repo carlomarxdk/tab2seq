@@ -62,7 +62,7 @@ def _build_source_collection(tmp_path: Path) -> SourceCollection:
 def _build_fitted_tokenizer(tmp_path: Path, cfg: TokenizerConfig | None = None) -> Tokenizer:
     collection = _build_source_collection(tmp_path)
     cohort = Cohort(name="tok-cohort", sources=collection, cache_dir=tmp_path / "cohort")
-    split_cfg = CohortConfig(train_frac=0.5, val_frac=0.25, test_frac=0.25, seed=11)
+    split_cfg = CohortConfig(use_splits=False)
 
     tok_cfg = cfg or TokenizerConfig()
     vocab = Vocabulary(tok_cfg.vocabulary)
@@ -76,7 +76,7 @@ def test_tokenizer_has_mapping_properties(tmp_path: Path):
     assert tokenizer.vocab_size > 0
     assert tokenizer.token2index
     assert tokenizer.index2token
-    assert tokenizer.config.cls_token in tokenizer.token2index
+    assert tokenizer.config.vocabulary.cls_token in tokenizer.token2index
 
 
 def test_encode_includes_cls_and_sep(tmp_path: Path):
@@ -94,8 +94,8 @@ def test_encode_includes_cls_and_sep(tmp_path: Path):
 
     token_ids = tokenizer.encode(events, source_name="events")
 
-    assert token_ids[0] == tokenizer.token2index[tokenizer.config.cls_token]
-    assert token_ids[-1] == tokenizer.token2index[tokenizer.config.sep_token]
+    assert token_ids[0] == tokenizer.token2index[tokenizer.config.vocabulary.cls_token]
+    assert token_ids[-1] == tokenizer.token2index[tokenizer.config.vocabulary.sep_token]
 
 
 def test_encode_excludes_id_and_temporal_columns_by_default(tmp_path: Path):
@@ -116,7 +116,9 @@ def test_encode_excludes_id_and_temporal_columns_by_default(tmp_path: Path):
     assert not any(tok.startswith("events__entity_id__") for tok in decoded)
     assert not any(tok.startswith("events__event_date__") for tok in decoded)
     assert not any(tok.startswith("events__wave__") for tok in decoded)
-    assert any(tok.startswith("events__event_type__") for tok in decoded)
+    assert any(tok.startswith("events__EVT__") for tok in decoded)
+    assert any(tok.startswith("events__STATUS__") for tok in decoded)
+    assert any(tok.startswith("events__COST__BIN_") for tok in decoded)
 
 
 def test_encode_respects_exclude_columns(tmp_path: Path):
@@ -137,8 +139,8 @@ def test_encode_respects_exclude_columns(tmp_path: Path):
 
     decoded = tokenizer.decode(tokenizer.encode(events, source_name="events"))
 
-    assert not any(tok.startswith("events__status__") for tok in decoded)
-    assert any(tok.startswith("events__event_type__") for tok in decoded)
+    assert not any(tok.startswith("events__STATUS__") for tok in decoded)
+    assert any(tok.startswith("events__EVT__") for tok in decoded)
 
 
 def test_encode_with_explicit_columns_still_requires_vocab_tokens(tmp_path: Path):
@@ -156,7 +158,7 @@ def test_encode_with_explicit_columns_still_requires_vocab_tokens(tmp_path: Path
     )
 
     assert not any(tok.startswith("events__wave__") for tok in decoded)
-    assert any(tok.startswith("events__event_type__") for tok in decoded)
+    assert any(tok.startswith("events__EVT__") for tok in decoded)
 
 
 def test_encode_with_explicit_unknown_column_is_filtered_out(tmp_path: Path):
@@ -171,8 +173,8 @@ def test_encode_with_explicit_unknown_column_is_filtered_out(tmp_path: Path):
     token_ids = tokenizer.encode(events, source_name="events", columns=["wave"])
 
     assert token_ids == [
-        tokenizer.token2index[tokenizer.config.cls_token],
-        tokenizer.token2index[tokenizer.config.sep_token],
+        tokenizer.token2index[tokenizer.config.vocabulary.cls_token],
+        tokenizer.token2index[tokenizer.config.vocabulary.sep_token],
     ]
 
 
@@ -204,9 +206,8 @@ def test_encode_unknown_categorical_maps_to_unk(tmp_path: Path):
     )
 
     token_ids = tokenizer.encode(events, source_name="events")
-    unk_id = tokenizer.token2index[tokenizer.config.unk_token]
+    unk_id = tokenizer.token2index[tokenizer.config.vocabulary.unk_token]
     assert unk_id in token_ids
-
 
 def test_encode_skips_null_values(tmp_path: Path):
     tokenizer = _build_fitted_tokenizer(tmp_path)
@@ -223,31 +224,32 @@ def test_encode_skips_null_values(tmp_path: Path):
 
     decoded = tokenizer.decode(tokenizer.encode(events, source_name="events"))
 
-    assert not any(tok.startswith("events__event_type__") for tok in decoded)
+    assert not any(tok.startswith("events__EVT__") for tok in decoded)
+    assert not any(tok.startswith("events__COST__BIN_") for tok in decoded)
+    assert any(tok.startswith("events__STATUS__") for tok in decoded)
 
 
 def test_decode_falls_back_to_unk_for_unknown_ids(tmp_path: Path):
     tokenizer = _build_fitted_tokenizer(tmp_path)
     decoded = tokenizer.decode([999999])
-    assert decoded == [tokenizer.config.unk_token]
-
+    assert decoded == [tokenizer.config.vocabulary.unk_token]
 
 def test_pad_sequence_truncate_and_pad(tmp_path: Path):
     tokenizer = _build_fitted_tokenizer(tmp_path)
 
     seq = [
-        tokenizer.token2index[tokenizer.config.cls_token],
+        tokenizer.token2index[tokenizer.config.vocabulary.cls_token],
         10,
         11,
-        tokenizer.token2index[tokenizer.config.sep_token],
+        tokenizer.token2index[tokenizer.config.vocabulary.sep_token],
     ]
     truncated = tokenizer.pad_sequence(seq, max_length=3)
     assert len(truncated) == 3
-    assert truncated[-1] == tokenizer.token2index[tokenizer.config.sep_token]
+    assert truncated[-1] == tokenizer.token2index[tokenizer.config.vocabulary.sep_token]
 
     padded = tokenizer.pad_sequence(seq, max_length=8)
     assert len(padded) == 8
-    assert padded[-1] == tokenizer.token2index[tokenizer.config.pad_token]
+    assert padded[-1] == tokenizer.token2index[tokenizer.config.vocabulary.pad_token]
 
 
 def test_encode_unknown_source_returns_only_framing_tokens(tmp_path: Path):
@@ -257,6 +259,6 @@ def test_encode_unknown_source_returns_only_framing_tokens(tmp_path: Path):
     token_ids = tokenizer.encode(events, source_name="missing_source")
 
     assert token_ids == [
-        tokenizer.token2index[tokenizer.config.cls_token],
-        tokenizer.token2index[tokenizer.config.sep_token],
+        tokenizer.token2index[tokenizer.config.vocabulary.cls_token],
+        tokenizer.token2index[tokenizer.config.vocabulary.sep_token],
     ]

@@ -107,7 +107,7 @@ def test_fit_from_cohort_train_builds_and_caches_vocabulary(tmp_path: Path):
     assert vocab_df.height > 0
     assert "pretty_token" in vocab_df.columns
     assert "[PAD]" in vocab.token2index
-    assert any(tok.startswith("health__cost__BIN_") for tok in vocab.token2index)
+    assert any(tok.startswith("health__COST__BIN_") for tok in vocab.token2index)
     assert not any(tok.startswith("health__entity_id__") for tok in vocab.token2index)
     assert not any(tok.startswith("labour__entity_id__") for tok in vocab.token2index)
     assert not any("birthday__DAYS_" in tok for tok in vocab.token2index)
@@ -151,7 +151,68 @@ def test_fit_from_cohort_train_uses_train_split_only(tmp_path: Path):
         .cast(pl.Utf8)
         .to_list()
     )
-    diag_tokens = {t for t in vocab.token2index if t.startswith("health__diagnosis__")}
-    observed = {t.split("health__diagnosis__", 1)[1] for t in diag_tokens}
+    diag_tokens = {t for t in vocab.token2index if t.startswith("health__DIAG__")}
+    observed = {t.split("health__DIAG__", 1)[1] for t in diag_tokens}
 
     assert observed.issubset(train_diag)
+
+
+def _build_repeated_token_collection(tmp_path: Path) -> SourceCollection:
+    repeated_df = pl.DataFrame(
+        {
+            "entity_id": ["E1", "E1", "E1", "E2"],
+            "date": ["2020-01-01", "2020-01-02", "2020-01-03", "2020-01-04"],
+            "diagnosis": ["A", "A", "A", "A"],
+        }
+    )
+    repeated_path = tmp_path / "repeated.parquet"
+    repeated_df.write_parquet(repeated_path)
+
+    return SourceCollection.from_configs(
+        [
+            SourceConfig(
+                name="repeated",
+                filepath=repeated_path,
+                id_col="entity_id",
+                categorical_cols=[
+                    CategoricalColConfig(col_name="diagnosis", prefix="DIAG"),
+                ],
+                temporal_cols=[
+                    TemporalColConfig(col_name="date", is_primary=True, drop_na=True),
+                ],
+            )
+        ]
+    )
+
+
+def test_count_mode_entity_unique_prunes_prolific_entity_repeats(tmp_path: Path):
+    collection = _build_repeated_token_collection(tmp_path)
+    cohort = Cohort(name="count-mode", sources=collection, cache_dir=tmp_path / "cohorts")
+    split_cfg = CohortConfig(use_splits=False)
+
+    overall_vocab = Vocabulary(
+        VocabularyConfig(min_token_count=3, count_mode="overall")
+    )
+    overall_vocab.fit_from_cohort_train(cohort, split_cfg, force_recompute=True)
+
+    entity_unique_vocab = Vocabulary(
+        VocabularyConfig(min_token_count=3, count_mode="entity_unique")
+    )
+    entity_unique_vocab.fit_from_cohort_train(cohort, split_cfg, force_recompute=True)
+
+    token = "repeated__DIAG__A"
+    assert token in overall_vocab.token2index
+    assert token not in entity_unique_vocab.token2index
+
+
+def test_count_mode_entity_unique_uses_entity_frequency(tmp_path: Path):
+    collection = _build_repeated_token_collection(tmp_path)
+    cohort = Cohort(name="count-values", sources=collection, cache_dir=tmp_path / "cohorts")
+    split_cfg = CohortConfig(use_splits=False)
+
+    vocab = Vocabulary(VocabularyConfig(min_token_count=1, count_mode="entity_unique"))
+    vocab_df = vocab.fit_from_cohort_train(cohort, split_cfg, force_recompute=True)
+
+    row = vocab_df.filter(pl.col("token") == "repeated__DIAG__A")
+    assert row.height == 1
+    assert row.get_column("count").item() == 2

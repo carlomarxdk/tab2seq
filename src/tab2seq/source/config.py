@@ -11,6 +11,8 @@ from pydantic import (
     model_validator,
 )
 
+from tab2seq._validators import validate_no_whitespace_string
+
 
 class ColumnConfig(BaseModel):
     """Base configuration for a single column.
@@ -132,15 +134,7 @@ class SourceConfig(BaseModel):
     @field_validator("name", "id_col", mode="before")
     @classmethod
     def _no_whitespace_string(cls, v: str, info: Any) -> str:
-        if not isinstance(v, str) or not v.strip():
-            raise ValueError(
-                f"'{info.field_name}' must be a non-empty, non-whitespace string."
-            )
-        if v != v.strip():
-            raise ValueError(
-                f"'{info.field_name}' cannot have leading or trailing whitespace."
-            )
-        return v
+        return validate_no_whitespace_string(v, info)
 
     @field_validator("filepath", mode="before")
     @classmethod
