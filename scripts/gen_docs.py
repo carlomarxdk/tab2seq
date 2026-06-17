@@ -1,31 +1,33 @@
 from pathlib import Path
 
+import mkdocs_gen_files
+
 src = Path("src")
-docs_api = Path("docs/api")
-docs_api.mkdir(parents=True, exist_ok=True)
 summary_lines = []
 
 for path in sorted(src.rglob("*.py")):
     module_path = path.relative_to(src).with_suffix("")
     doc_path = path.relative_to(src).with_suffix(".md")
-    full_doc_path = docs_api / doc_path
-
     parts = tuple(module_path.parts)
     if parts[-1] == "__init__":
         parts = parts[:-1]
-        full_doc_path = full_doc_path.with_name("index.md")
+        doc_path = Path("api", *parts, "index.md")
     elif parts[-1].startswith("_"):
         continue
+    else:
+        doc_path = Path("api", *parts).with_suffix(".md")
 
-    full_doc_path.parent.mkdir(parents=True, exist_ok=True)
     ident = ".".join(parts)
-    full_doc_path.write_text(f"# `{ident}`\n\n::: {ident}\n")
+    with mkdocs_gen_files.open(doc_path, "w") as doc_file:
+        doc_file.write(f"# `{ident}`\n\n::: {ident}\n")
+    mkdocs_gen_files.set_edit_path(doc_path, path)
 
     indent = "    " * (len(parts) - 1)
-    summary_lines.append(f"{indent}* [{ident}]({full_doc_path.relative_to(docs_api)})\n")
+    summary_lines.append(f"{indent}* [{ident}]({doc_path.relative_to('api')})\n")
 
 # writes the nav file that literate-nav reads to build the API sidebar
-(docs_api / "SUMMARY.md").write_text("".join(summary_lines))
+with mkdocs_gen_files.open("api/SUMMARY.md", "w") as summary_file:
+    summary_file.write("".join(summary_lines))
 
 # summary_lines has one entry per generated .md file (skipping _private modules)
-print(f"Generated {len(summary_lines)} API pages in {docs_api}")
+print(f"Generated {len(summary_lines)} API pages in api/")
